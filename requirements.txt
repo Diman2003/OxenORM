@@ -1,0 +1,14 @@
+# Development and testing dependencies
+pytest
+pytest-asyncio
+pytest-cov
+
+# Optional: For better development experience
+black
+flake8
+mypy
+
+# Database drivers (optional - for testing with different databases)
+# asyncpg  # PostgreSQL
+# aiomysql   # MySQL
+# aiosqlite # SQLite 

@@ -1,0 +1,13 @@
+/Users/developer/Desktop/OxenORM/target/debug/deps/pyo3_build_config-313785acd8df46d0.d: /Users/developer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.19.2/src/lib.rs /Users/developer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.19.2/src/errors.rs /Users/developer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.19.2/src/impl_.rs /Users/developer/Desktop/OxenORM/target/debug/build/pyo3-build-config-2993c3158552b033/out/pyo3-build-config-file.txt /Users/developer/Desktop/OxenORM/target/debug/build/pyo3-build-config-2993c3158552b033/out/pyo3-build-config.txt
+
+/Users/developer/Desktop/OxenORM/target/debug/deps/libpyo3_build_config-313785acd8df46d0.rlib: /Users/developer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.19.2/src/lib.rs /Users/developer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.19.2/src/errors.rs /Users/developer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.19.2/src/impl_.rs /Users/developer/Desktop/OxenORM/target/debug/build/pyo3-build-config-2993c3158552b033/out/pyo3-build-config-file.txt /Users/developer/Desktop/OxenORM/target/debug/build/pyo3-build-config-2993c3158552b033/out/pyo3-build-config.txt
+
+/Users/developer/Desktop/OxenORM/target/debug/deps/libpyo3_build_config-313785acd8df46d0.rmeta: /Users/developer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.19.2/src/lib.rs /Users/developer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.19.2/src/errors.rs /Users/developer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.19.2/src/impl_.rs /Users/developer/Desktop/OxenORM/target/debug/build/pyo3-build-config-2993c3158552b033/out/pyo3-build-config-file.txt /Users/developer/Desktop/OxenORM/target/debug/build/pyo3-build-config-2993c3158552b033/out/pyo3-build-config.txt
+
+/Users/developer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.19.2/src/lib.rs:
+/Users/developer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.19.2/src/errors.rs:
+/Users/developer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.19.2/src/impl_.rs:
+/Users/developer/Desktop/OxenORM/target/debug/build/pyo3-build-config-2993c3158552b033/out/pyo3-build-config-file.txt:
+/Users/developer/Desktop/OxenORM/target/debug/build/pyo3-build-config-2993c3158552b033/out/pyo3-build-config.txt:
+
+# env-dep:OUT_DIR=/Users/developer/Desktop/OxenORM/target/debug/build/pyo3-build-config-2993c3158552b033/out

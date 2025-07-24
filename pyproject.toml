@@ -1,0 +1,69 @@
+[project]
+name = "oxen-orm"
+version = "0.1.0"
+description = "High-performance Python ORM backed by Rust"
+authors = [{name="Nishant Gupta", email="nishant@anec.app"}]
+license = {text="Apache-2.0"}
+readme = "README.rst"
+keywords = ["sql", "mysql", "postgres", "sqlite", "relational", "database", "rdbms", "orm", "object mapper", "async", "asyncio", "rust", "high-performance"]
+include = ["CHANGELOG.rst", "LICENSE", "README.rst"]
+dynamic = ["classifiers"]
+requires-python = ">=3.9"
+dependencies = [
+    "pydantic>=2.0.0",
+    "typing-extensions>=4.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=4.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+    "black>=23.0.0",
+]
+postgres = ["asyncpg>=0.28.0"]
+mysql = ["aiomysql>=0.2.0"]
+sqlite = ["aiosqlite>=0.19.0"]
+
+[project.urls]
+homepage = "https://github.com/oxen-orm/oxen-orm"
+repository = "https://github.com/oxen-orm/oxen-orm.git"
+documentation = "https://oxen-orm.readthedocs.io"
+
+[build-system]
+requires = ["maturin>=1.0.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "oxen_engine"
+python-sources = "oxen"
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]

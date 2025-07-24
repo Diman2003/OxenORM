@@ -1,0 +1,48 @@
+Metadata-Version: 2.3
+Name: pypika-tortoise
+Version: 0.6.1
+Summary: Forked from pypika and streamline just for tortoise-orm
+License: Apache-2.0
+Keywords: postgresql,Tortoise-ORM,mysql,sqlite,sql
+Author: long2ice
+Author-email: long2ice@gmail.com
+Requires-Python: >=3.9
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Project-URL: Documentation, https://github.com/tortoise/pypika-tortoise
+Project-URL: Homepage, https://github.com/tortoise/pypika-tortoise
+Project-URL: Repository, https://github.com/tortoise/pypika-tortoise.git
+Description-Content-Type: text/markdown
+
+# pypika-tortoise
+
+[![image](https://img.shields.io/pypi/v/pypika-tortoise.svg?style=flat)](https://pypi.python.org/pypi/pypika-tortoise)
+[![image](https://img.shields.io/github/license/tortoise/pypika-tortoise)](https://github.com/tortoise/pypika-tortoise)
+[![image](https://github.com/tortoise/pypika-tortoise/workflows/pypi/badge.svg)](https://github.com/tortoise/pypika-tortoise/actions?query=workflow:pypi)
+[![image](https://github.com/tortoise/pypika-tortoise/workflows/ci/badge.svg)](https://github.com/tortoise/pypika-tortoise/actions?query=workflow:ci)
+
+Forked from [pypika](https://github.com/kayak/pypika) and adapted just for tortoise-orm.
+
+## Why forked?
+
+The original repository includes many databases that Tortoise ORM doesn’t require. It aims to be a comprehensive SQL builder with broad compatibility, but that’s not the goal for Tortoise ORM. Having it forked makes it easier to add new features for Tortoise.
+
+## What changed?
+
+Deleted unnecessary code that Tortoise ORM doesn’t require, added features tailored specifically for Tortoise ORM,
+and modified to improve query generation performance.
+
+## ThanksTo
+
+- [pypika](https://github.com/kayak/pypika), a Python SQL query builder that exposes the full expressiveness of SQL,
+using a syntax that mirrors the resulting query structure.
+
+## License
+
+This project is licensed under the [Apache-2.0](./LICENSE) License.
+

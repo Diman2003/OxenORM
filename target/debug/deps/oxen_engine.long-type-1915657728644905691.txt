@@ -1,0 +1,1 @@
+pyo3::Py<pyo3::PyAny>: From<HashMap<std::string::String, pyo3::Py<pyo3::PyAny>>>
