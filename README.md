@@ -32,10 +32,11 @@ OxenORM is a hybrid ORM that combines the developer-friendly Python interface of
 - ✅ **Schema Generation**: Automatic table creation and migration
 - ✅ **Migration System**: Complete file-based migration management
 - ✅ **CLI Tools**: Command-line interface for migration operations
-- ✅ **PostgreSQL Support**: Full PostgreSQL integration with connection pooling
+- ✅ **Multi-Database Support**: PostgreSQL, MySQL, and SQLite with optimizations
+- ✅ **Database Switching**: Seamless switching between different database backends
+- ✅ **Connection Pooling**: Optimized connection management for each database type
+- ✅ **Database-Specific Optimizations**: Query optimizations tailored to each database
 - ✅ **In-Memory Storage**: Fast development and testing
-- 🔄 **SQLite Support**: Coming soon
-- 🔄 **MySQL Support**: Coming soon
 
 ## 🚀 Quick Start
 

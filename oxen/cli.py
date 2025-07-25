@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     from oxen.rust_engine import OxenEngine
+    from oxen.multi_db_engine import MultiDbEngine, DatabaseSwitcher, DatabaseType
     from oxen.migrations import MigrationEngine, Migration, MigrationStatus
     RUST_AVAILABLE = True
 except ImportError as e:
@@ -45,6 +46,9 @@ Examples:
   oxen migrate rollback 20231201120000
   oxen migrate run
   oxen migrate history
+  oxen db test postgresql://user:pass@localhost/db
+  oxen db list
+  oxen db switch postgres
             """
         )
 
@@ -72,6 +76,48 @@ Examples:
         subparsers = parser.add_subparsers(
             dest='command',
             help='Available commands'
+        )
+
+        # Database command
+        db_parser = subparsers.add_parser(
+            'db',
+            help='Manage multiple databases'
+        )
+        db_subparsers = db_parser.add_subparsers(
+            dest='db_command',
+            help='Database subcommands'
+        )
+
+        # db test
+        test_parser = db_subparsers.add_parser(
+            'test',
+            help='Test database connection'
+        )
+        test_parser.add_argument(
+            'connection_string',
+            help='Database connection string to test'
+        )
+
+        # db info
+        info_parser = db_subparsers.add_parser(
+            'info',
+            help='Get database information'
+        )
+
+        # db switch
+        switch_parser = db_subparsers.add_parser(
+            'switch',
+            help='Switch between databases'
+        )
+        switch_parser.add_argument(
+            'database_name',
+            help='Name of the database to switch to'
+        )
+
+        # db list
+        list_parser = db_subparsers.add_parser(
+            'list',
+            help='List available databases'
         )
 
         # Migrate command
@@ -491,6 +537,77 @@ Examples:
             for warning in validation['warnings']:
                 print(f"    ⚠️  {warning}")
 
+    async def cmd_db_test(self, args):
+        """Handle 'db test' command."""
+        print("🔍 Testing Database Connection")
+        print("=" * 40)
+
+        try:
+            is_connected = await test_database_connection(args.connection_string)
+            if is_connected:
+                print(f"✅ Connection successful: {args.connection_string}")
+            else:
+                print(f"❌ Connection failed: {args.connection_string}")
+        except Exception as e:
+            print(f"❌ Connection test failed: {e}")
+
+    async def cmd_db_info(self, args):
+        """Handle 'db info' command."""
+        print("📊 Database Information")
+        print("=" * 40)
+
+        if not self.db_switcher.get_current_engine():
+            print("❌ No database connected. Use 'oxen db switch <database>' first.")
+            return
+
+        try:
+            engine = self.db_switcher.get_current_engine()
+            info = await engine.get_database_info()
+            
+            headers = ["Property", "Value"]
+            rows = [
+                ["Database Type", info.get('database_type', 'Unknown')],
+                ["Version", info.get('version', 'Unknown')],
+                ["Connection String", info.get('connection_string', 'Unknown')],
+            ]
+            self._print_table(headers, rows)
+        except Exception as e:
+            print(f"❌ Failed to get database info: {e}")
+
+    async def cmd_db_switch(self, args):
+        """Handle 'db switch' command."""
+        print("🔄 Switching Database")
+        print("=" * 40)
+
+        try:
+            engine = await self.db_switcher.switch_to(args.database_name)
+            print(f"✅ Switched to database: {args.database_name}")
+            print(f"   Type: {engine.get_database_type().value}")
+        except Exception as e:
+            print(f"❌ Failed to switch database: {e}")
+
+    async def cmd_db_list(self, args):
+        """Handle 'db list' command."""
+        print("📋 Available Databases")
+        print("=" * 40)
+
+        databases = self.db_switcher.list_databases()
+        if not databases:
+            print("No databases configured.")
+            return
+
+        headers = ["Name", "Type", "Status"]
+        rows = []
+        for db_name in databases:
+            try:
+                engine = self.db_switcher.engines[db_name]
+                status = "Connected" if engine.is_connected() else "Disconnected"
+                rows.append([db_name, engine.get_database_type().value, status])
+            except Exception:
+                rows.append([db_name, "Unknown", "Error"])
+
+        self._print_table(headers, rows)
+
     async def run(self, args: Optional[List[str]] = None):
         """Run the CLI with the given arguments."""
         parsed_args = self.parser.parse_args(args)
@@ -526,6 +643,29 @@ Examples:
                     print(f"❌ Unknown migration command: {parsed_args.migrate_command}")
             finally:
                 await self._disconnect()
+
+        elif parsed_args.command == 'db':
+            if not parsed_args.db_command:
+                print("❌ Database subcommand is required.")
+                print("Use 'oxen db --help' for available subcommands.")
+                return
+
+            # Initialize database switcher
+            self.db_switcher = DatabaseSwitcher()
+
+            try:
+                if parsed_args.db_command == 'test':
+                    await self.cmd_db_test(parsed_args)
+                elif parsed_args.db_command == 'info':
+                    await self.cmd_db_info(parsed_args)
+                elif parsed_args.db_command == 'switch':
+                    await self.cmd_db_switch(parsed_args)
+                elif parsed_args.db_command == 'list':
+                    await self.cmd_db_list(parsed_args)
+                else:
+                    print(f"❌ Unknown database command: {parsed_args.db_command}")
+            finally:
+                await self.db_switcher.close_all()
 
 
 def main():

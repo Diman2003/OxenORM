@@ -3,6 +3,8 @@
 //! This crate provides the high-performance Rust backend for OxenORM,
 //! handling database operations, connection pooling, and query execution.
 
+mod multi_db;
+
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyDict};
 use std::collections::HashMap;
