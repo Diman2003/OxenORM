@@ -51,6 +51,11 @@ class MultipleObjectsReturned(OxenError):
     pass
 
 
+class IncompleteInstanceError(OxenError):
+    """Raised when a model instance is incomplete or partially loaded."""
+    pass
+
+
 class OperationalError(OxenError):
     """Raised when there's an operational error with the database."""
     pass
@@ -78,4 +83,9 @@ class FieldError(OxenError):
 
 class ModelError(OxenError):
     """Raised when there's a model-related error."""
+    pass
+
+
+class ParamsError(OxenError):
+    """Raised when there's an error with query parameters."""
     pass 

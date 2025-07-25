@@ -12,7 +12,23 @@ from .base import Field
 T = TypeVar('T')
 
 
-class ForeignKeyField(Field):
+class RelationalField(Field):
+    """Base class for all relational fields."""
+    
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.is_relational = True
+    
+    def _validate_value(self, value: Any) -> Any:
+        """Base validation for relational fields."""
+        return value
+    
+    def _get_sql_type(self) -> str:
+        """Get the SQL type for this field."""
+        raise NotImplementedError("Subclasses must implement _get_sql_type")
+
+
+class ForeignKeyField(RelationalField):
     """Foreign key field for referencing other models."""
     
     def __init__(
@@ -85,7 +101,7 @@ class OneToOneField(ForeignKeyField):
         )
 
 
-class ManyToManyField(Field):
+class ManyToManyField(RelationalField):
     """Many-to-many relationship field."""
     
     def __init__(

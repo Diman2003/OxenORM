@@ -55,6 +55,23 @@ class TextField(Field):
     def _get_sql_type(self) -> str:
         return "TEXT"
 
+class IntField(Field):
+    """32-bit integer field"""
+    
+    def _validate(self, value: Any) -> Any:
+        if not isinstance(value, int):
+            raise ValidationError(f"IntField must be an integer, got {type(value)}")
+        return value
+    
+    def to_db_value(self, value: Any) -> Any:
+        return int(value) if value is not None else None
+    
+    def from_db_value(self, value: Any) -> Any:
+        return int(value) if value is not None else None
+    
+    def _get_sql_type(self) -> str:
+        return "INTEGER"
+
 class IntegerField(Field):
     """32-bit integer field"""
     

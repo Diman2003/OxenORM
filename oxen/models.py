@@ -20,7 +20,7 @@ from datetime import datetime
 
 from oxen.fields.base import Field
 from oxen.fields.data import (
-    IntField, CharField, TextField, BooleanField, DateTimeField,
+    IntegerField, CharField, TextField, BooleanField, DateTimeField,
     FloatField, DecimalField, JSONField, UUIDField
 )
 from oxen.fields.relational import (
@@ -104,7 +104,7 @@ class MetaInfo:
         # Ensure we have a primary key
         if not self.pk_field:
             # Create default ID field
-            id_field = IntField(primary_key=True, auto_increment=True)
+            id_field = IntegerField(primary_key=True, auto_increment=True)
             self.add_field("id", id_field)
             self.pk_attr = "id"
             self.pk_field = id_field
@@ -446,7 +446,7 @@ class Model(metaclass=ModelMeta):
             created = True
             # Generate primary key if needed
             if self._meta.pk_field and self._meta.pk_field.generated and not self.pk:
-                if isinstance(self._meta.pk_field, IntField):
+                if isinstance(self._meta.pk_field, IntegerField):
                     # For now, use a simple increment - in real implementation,
                     # this would come from the database
                     self.pk = int(uuid.uuid4().hex[:8], 16)
