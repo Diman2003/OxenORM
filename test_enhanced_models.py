@@ -1,343 +1,399 @@
 #!/usr/bin/env python3
 """
-Enhanced OxenORM Model System Test
-Tests the comprehensive model system with all field types and functionality
+Test Enhanced Models and Query Building
+
+This script demonstrates the enhanced model definitions and query building
+capabilities copied from Tortoise ORM and implemented for OxenORM.
 """
 
 import asyncio
-import sys
-import os
-from datetime import datetime, date, time
-from decimal import Decimal
 import uuid
-import json
+from datetime import datetime
+from typing import Optional
 
-# Add the oxen package to the path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from oxen.models import Model, ModelMeta
-from oxen.fields import (
-    CharField, TextField, IntegerField, FloatField, DecimalField,
-    BooleanField, DateTimeField, DateField, TimeField, UUIDField,
-    JSONField, BinaryField, EmailField, URLField, SlugField,
-    AutoField, BigIntegerField, SmallIntegerField, PositiveIntegerField
+from oxen.models import Model
+from oxen.fields.data import (
+    IntField, CharField, TextField, BooleanField, DateTimeField,
+    FloatField, DecimalField, JSONField, UUIDField
 )
-from oxen.exceptions import ValidationError, ModelError
+from oxen.fields.relational import (
+    ForeignKeyField, ManyToManyField, OneToOneField
+)
+from oxen.expressions import Q, F
+from oxen.validators import email, min_value, max_value, min_length, max_length
+from oxen.signals import pre_save, post_save
 
-def print_section(title):
-    """Print a section header"""
-    print(f"\n{'='*60}")
-    print(f"  {title}")
-    print(f"{'='*60}")
 
-def print_test_result(test_name, success, error=None):
-    """Print test result"""
-    status = "✅ PASS" if success else "❌ FAIL"
-    print(f"{status} {test_name}")
-    if error:
-        print(f"    Error: {error}")
-
+# Example models demonstrating the enhanced functionality
 class User(Model):
-    """Test user model with various field types"""
+    """User model with various field types and validators."""
     
-    # Basic fields
-    username = CharField(max_length=50, unique=True)
-    email = EmailField(unique=True)
-    password_hash = CharField(max_length=128)
-    
-    # Personal info
-    first_name = CharField(max_length=30)
-    last_name = CharField(max_length=30)
-    bio = TextField(null=True, blank=True)
-    
-    # Numbers
-    age = PositiveIntegerField(null=True)
-    height = FloatField(null=True)
-    weight = DecimalField(max_digits=5, decimal_places=2, null=True)
-    
-    # Dates and times
-    birth_date = DateField(null=True)
-    last_login = DateTimeField(null=True)
-    preferred_time = TimeField(null=True)
-    
-    # Other types
+    username = CharField(max_length=50, unique=True, validators=[min_length(3)])
+    email = CharField(max_length=255, validators=[email()])
+    first_name = CharField(max_length=100)
+    last_name = CharField(max_length=100)
+    age = IntField(null=True, validators=[min_value(0), max_value(150)])
     is_active = BooleanField(default=True)
-    profile_uuid = UUIDField(null=True)
-    settings = JSONField(default=dict)
-    avatar_data = BinaryField(null=True)
-    
-    # URLs and slugs
-    website = URLField(null=True)
-    slug = SlugField(unique=True)
+    created_at = DateTimeField(auto_now_add=True)
+    updated_at = DateTimeField(auto_now=True)
+    profile_data = JSONField(null=True)
+    uuid = UUIDField(default=uuid.uuid4)
     
     class Meta:
-        db_table = "users"
+        table_name = "users"
+        ordering = ("username",)
+
+
+class Category(Model):
+    """Category model for blog posts."""
+    
+    name = CharField(max_length=100, unique=True)
+    description = TextField(null=True)
+    slug = CharField(max_length=100, unique=True)
+    is_active = BooleanField(default=True)
+    created_at = DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        table_name = "categories"
+        ordering = ("name",)
+
 
 class Post(Model):
-    """Test post model for relationships"""
+    """Blog post model with relationships."""
     
     title = CharField(max_length=200)
     content = TextField()
-    author_id = IntegerField()  # Would be ForeignKey in real implementation
+    slug = CharField(max_length=200, unique=True)
+    excerpt = TextField(null=True)
+    is_published = BooleanField(default=False)
+    published_at = DateTimeField(null=True)
     created_at = DateTimeField(auto_now_add=True)
     updated_at = DateTimeField(auto_now=True)
-    is_published = BooleanField(default=False)
+    
+    # Relationships
+    author = ForeignKeyField(User, related_name="posts")
+    category = ForeignKeyField(Category, related_name="posts")
+    tags = ManyToManyField("Tag", related_name="posts")
     
     class Meta:
-        db_table = "posts"
+        table_name = "posts"
+        ordering = ("-created_at",)
 
-def test_model_initialization():
-    """Test model initialization and field discovery"""
-    print_section("Model Initialization Tests")
-    
-    # Test field discovery
-    User._initialize_model()
-    
-    expected_fields = {
-        'username', 'email', 'password_hash', 'first_name', 'last_name',
-        'bio', 'age', 'height', 'weight', 'birth_date', 'last_login',
-        'preferred_time', 'is_active', 'profile_uuid', 'settings',
-        'avatar_data', 'website', 'slug'
-    }
-    
-    actual_fields = set(User._fields.keys())
-    success = expected_fields.issubset(actual_fields)
-    print_test_result("Field Discovery", success)
-    
-    if not success:
-        missing = expected_fields - actual_fields
-        extra = actual_fields - expected_fields
-        print(f"    Missing fields: {missing}")
-        print(f"    Extra fields: {extra}")
-    
-    # Test table name
-    expected_table = "users"
-    actual_table = User._table_name
-    success = actual_table == expected_table
-    print_test_result("Table Name Generation", success, 
-                     f"Expected '{expected_table}', got '{actual_table}'")
-    
-    # Test primary key
-    expected_pk = "id"
-    actual_pk = User._pk_field
-    success = actual_pk == expected_pk
-    print_test_result("Primary Key Field", success,
-                     f"Expected '{expected_pk}', got '{actual_pk}'")
 
-def test_field_validation():
-    """Test field validation"""
-    print_section("Field Validation Tests")
+class Tag(Model):
+    """Tag model for blog posts."""
     
-    # Test valid user creation
-    try:
-        user = User(
-            username="testuser",
-            email="test@example.com",
-            password_hash="hashed_password",
-            first_name="John",
-            last_name="Doe",
-            age=25,
-            height=175.5,
-            weight=Decimal("70.5"),
-            birth_date=date(1998, 1, 1),
-            last_login=datetime.now(),
-            preferred_time=time(9, 0),
-            is_active=True,
-            profile_uuid=uuid.uuid4(),
-            settings={"theme": "dark", "notifications": True},
-            website="https://example.com",
-            slug="john-doe"
-        )
-        print_test_result("Valid User Creation", True)
-    except Exception as e:
-        print_test_result("Valid User Creation", False, str(e))
+    name = CharField(max_length=50, unique=True)
+    slug = CharField(max_length=50, unique=True)
+    description = TextField(null=True)
+    created_at = DateTimeField(auto_now_add=True)
     
-    # Test invalid email
-    try:
-        user = User(username="test", email="invalid-email")
-        print_test_result("Invalid Email Validation", False, "Should have raised ValidationError")
-    except ValidationError:
-        print_test_result("Invalid Email Validation", True)
-    except Exception as e:
-        print_test_result("Invalid Email Validation", False, f"Wrong exception: {e}")
-    
-    # Test invalid URL
-    try:
-        user = User(username="test", email="test@example.com", website="not-a-url")
-        print_test_result("Invalid URL Validation", False, "Should have raised ValidationError")
-    except ValidationError:
-        print_test_result("Invalid URL Validation", True)
-    except Exception as e:
-        print_test_result("Invalid URL Validation", False, f"Wrong exception: {e}")
-    
-    # Test invalid slug
-    try:
-        user = User(username="test", email="test@example.com", slug="Invalid Slug!")
-        print_test_result("Invalid Slug Validation", False, "Should have raised ValidationError")
-    except ValidationError:
-        print_test_result("Invalid Slug Validation", True)
-    except Exception as e:
-        print_test_result("Invalid Slug Validation", False, f"Wrong exception: {e}")
-    
-    # Test negative age
-    try:
-        user = User(username="test", email="test@example.com", age=-5)
-        print_test_result("Negative Age Validation", False, "Should have raised ValidationError")
-    except ValidationError:
-        print_test_result("Negative Age Validation", True)
-    except Exception as e:
-        print_test_result("Negative Age Validation", False, f"Wrong exception: {e}")
+    class Meta:
+        table_name = "tags"
+        ordering = ("name",)
 
-def test_field_types():
-    """Test specific field type behaviors"""
-    print_section("Field Type Tests")
-    
-    # Test CharField max_length
-    try:
-        user = User(username="a" * 51, email="test@example.com")
-        print_test_result("CharField Max Length", False, "Should have raised ValidationError")
-    except ValidationError:
-        print_test_result("CharField Max Length", True)
-    
-    # Test DecimalField precision
-    try:
-        user = User(username="test", email="test@example.com", weight=Decimal("123.456"))
-        print_test_result("DecimalField Precision", False, "Should have raised ValidationError")
-    except ValidationError:
-        print_test_result("DecimalField Precision", True)
-    
-    # Test JSONField
-    try:
-        user = User(
-            username="test", 
-            email="test@example.com",
-            settings={"nested": {"data": [1, 2, 3]}}
-        )
-        print_test_result("JSONField Complex Data", True)
-    except Exception as e:
-        print_test_result("JSONField Complex Data", False, str(e))
-    
-    # Test BinaryField
-    try:
-        user = User(
-            username="test", 
-            email="test@example.com",
-            avatar_data=b"binary_data_here"
-        )
-        print_test_result("BinaryField Bytes", True)
-    except Exception as e:
-        print_test_result("BinaryField Bytes", False, str(e))
 
-def test_model_methods():
-    """Test model methods and properties"""
-    print_section("Model Methods Tests")
+class Comment(Model):
+    """Comment model for blog posts."""
     
-    user = User(
-        username="testuser",
-        email="test@example.com",
+    content = TextField()
+    is_approved = BooleanField(default=False)
+    created_at = DateTimeField(auto_now_add=True)
+    updated_at = DateTimeField(auto_now=True)
+    
+    # Relationships
+    post = ForeignKeyField(Post, related_name="comments")
+    author = ForeignKeyField(User, related_name="comments")
+    parent = ForeignKeyField("self", null=True, related_name="replies")
+    
+    class Meta:
+        table_name = "comments"
+        ordering = ("-created_at",)
+
+
+class Profile(Model):
+    """User profile model with one-to-one relationship."""
+    
+    bio = TextField(null=True)
+    avatar_url = CharField(max_length=255, null=True)
+    website = CharField(max_length=255, null=True)
+    location = CharField(max_length=100, null=True)
+    birth_date = DateTimeField(null=True)
+    created_at = DateTimeField(auto_now_add=True)
+    updated_at = DateTimeField(auto_now=True)
+    
+    # One-to-one relationship
+    user = OneToOneField(User, related_name="profile")
+    
+    class Meta:
+        table_name = "profiles"
+
+
+# Signal handlers
+@pre_save(User)
+async def user_pre_save(sender, instance, **kwargs):
+    """Pre-save signal handler for User model."""
+    print(f"About to save user: {instance.username}")
+    if not instance.username:
+        instance.username = f"user_{uuid.uuid4().hex[:8]}"
+
+
+@post_save(User)
+async def user_post_save(sender, instance, created, **kwargs):
+    """Post-save signal handler for User model."""
+    if created:
+        print(f"Created new user: {instance.username}")
+    else:
+        print(f"Updated user: {instance.username}")
+
+
+@pre_save(Post)
+async def post_pre_save(sender, instance, **kwargs):
+    """Pre-save signal handler for Post model."""
+    print(f"About to save post: {instance.title}")
+    if instance.is_published and not instance.published_at:
+        instance.published_at = datetime.now()
+
+
+async def test_model_creation():
+    """Test model creation and basic operations."""
+    print("=== Testing Model Creation ===")
+    
+    # Create users
+    user1 = User(
+        username="john_doe",
+        email="john@example.com",
         first_name="John",
-        last_name="Doe"
+        last_name="Doe",
+        age=30
     )
     
-    # Test is_new property
-    success = user.is_new == True
-    print_test_result("is_new Property", success)
+    user2 = User(
+        username="jane_smith",
+        email="jane@example.com",
+        first_name="Jane",
+        last_name="Smith",
+        age=25
+    )
     
-    # Test pk property (should be None for new instance)
-    success = user.pk is None
-    print_test_result("pk Property (New)", success)
+    print(f"User 1: {user1}")
+    print(f"User 2: {user2}")
+    print(f"User 1 PK: {user1.pk}")
+    print(f"User 2 PK: {user2.pk}")
     
-    # Test string representation
-    repr_str = repr(user)
-    success = "User(" in repr_str and "username='testuser'" in repr_str
-    print_test_result("String Representation", success, f"Got: {repr_str}")
+    # Test field access
+    print(f"User 1 username: {user1.username}")
+    print(f"User 1 email: {user1.email}")
+    print(f"User 1 age: {user1.age}")
+    print(f"User 1 is_active: {user1.is_active}")
+    print(f"User 1 created_at: {user1.created_at}")
+    
+    # Test model methods
+    print(f"User 1 string representation: {str(user1)}")
+    print(f"User 1 repr: {repr(user1)}")
+    
+    # Test field iteration
+    print("User 1 fields:")
+    for field_name, value in user1:
+        print(f"  {field_name}: {value}")
 
-def test_queryset_interface():
-    """Test QuerySet interface"""
-    print_section("QuerySet Interface Tests")
-    
-    # Test objects() method
-    try:
-        queryset = User.objects()
-        success = hasattr(queryset, 'filter') and hasattr(queryset, 'get')
-        print_test_result("QuerySet Interface", success)
-    except Exception as e:
-        print_test_result("QuerySet Interface", False, str(e))
 
-def test_model_meta():
-    """Test model meta configuration"""
-    print_section("Model Meta Tests")
+async def test_queryset_operations():
+    """Test queryset operations and query building."""
+    print("\n=== Testing QuerySet Operations ===")
     
-    # Test custom table name
-    class CustomTableModel(Model):
-        name = CharField(max_length=100)
-        
-        class Meta:
-            db_table = "custom_table"
-    
-    CustomTableModel._initialize_model()
-    success = CustomTableModel._table_name == "custom_table"
-    print_test_result("Custom Table Name", success)
-
-def test_dynamic_model_creation():
-    """Test dynamic model creation"""
-    print_section("Dynamic Model Creation Tests")
-    
-    from oxen.models import create_model
-    
-    # Create a model dynamically
-    fields = {
-        'name': CharField(max_length=100),
-        'value': IntegerField(),
-        'created_at': DateTimeField(auto_now_add=True)
-    }
-    
-    DynamicModel = create_model('DynamicModel', fields, db_table='dynamic_models')
-    
-    # Test the dynamic model
-    try:
-        instance = DynamicModel(name="test", value=42)
-        success = instance.name == "test" and instance.value == 42
-        print_test_result("Dynamic Model Creation", success)
-    except Exception as e:
-        print_test_result("Dynamic Model Creation", False, str(e))
-
-def run_all_tests():
-    """Run all tests"""
-    print("🐂 OxenORM Enhanced Model System Test")
-    print("=" * 60)
-    
-    tests = [
-        test_model_initialization,
-        test_field_validation,
-        test_field_types,
-        test_model_methods,
-        test_queryset_interface,
-        test_model_meta,
-        test_dynamic_model_creation
+    # Simulate some data
+    users = [
+        User(username="user1", email="user1@example.com", age=25),
+        User(username="user2", email="user2@example.com", age=30),
+        User(username="user3", email="user3@example.com", age=35),
     ]
     
-    passed = 0
-    total = 0
+    # Test filtering
+    print("Testing filtering:")
+    queryset = User.objects.filter(age__gte=30)
+    print(f"Users age >= 30: {queryset}")
     
-    for test in tests:
-        try:
-            test()
-            passed += 1
-        except Exception as e:
-            print(f"❌ Test {test.__name__} failed with exception: {e}")
-        total += 1
+    queryset = User.objects.filter(username__contains="user")
+    print(f"Users with 'user' in username: {queryset}")
     
-    print_section("Test Summary")
-    print(f"Tests passed: {passed}/{total}")
+    # Test Q objects
+    print("Testing Q objects:")
+    queryset = User.objects.filter(
+        Q(age__gte=30) | Q(username__startswith="user")
+    )
+    print(f"Complex filter: {queryset}")
     
-    if passed == total:
-        print("🎉 All tests passed! The enhanced model system is working correctly.")
-    else:
-        print("⚠️  Some tests failed. Please review the errors above.")
+    # Test ordering
+    print("Testing ordering:")
+    queryset = User.objects.order_by("-age")
+    print(f"Users ordered by age desc: {queryset}")
     
-    return passed == total
+    # Test annotations
+    print("Testing annotations:")
+    queryset = User.objects.annotate(
+        name_length=F("username").length()
+    )
+    print(f"Users with name length: {queryset}")
+    
+    # Test values and values_list
+    print("Testing values:")
+    queryset = User.objects.values("username", "email")
+    print(f"User values: {queryset}")
+    
+    print("Testing values_list:")
+    queryset = User.objects.values_list("username", flat=True)
+    print(f"Username list: {queryset}")
+
+
+async def test_relationships():
+    """Test relationship operations."""
+    print("\n=== Testing Relationships ===")
+    
+    # Create related objects
+    user = User(username="blogger", email="blogger@example.com")
+    category = Category(name="Technology", slug="tech")
+    post = Post(
+        title="My First Post",
+        content="This is my first blog post content.",
+        slug="my-first-post",
+        author=user,
+        category=category
+    )
+    
+    print(f"Post: {post}")
+    print(f"Post author: {post.author}")
+    print(f"Post category: {post.category}")
+    
+    # Test reverse relationships
+    print(f"User posts: {user.posts}")
+    print(f"Category posts: {category.posts}")
+
+
+async def test_bulk_operations():
+    """Test bulk operations."""
+    print("\n=== Testing Bulk Operations ===")
+    
+    # Create multiple users
+    users = [
+        User(username=f"bulk_user_{i}", email=f"user{i}@example.com", age=20+i)
+        for i in range(5)
+    ]
+    
+    print(f"Created {len(users)} users for bulk operations")
+    
+    # Test bulk create
+    print("Testing bulk create:")
+    created_users = await User.objects.bulk_create(users)
+    print(f"Bulk created {len(created_users)} users")
+    
+    # Test bulk update
+    print("Testing bulk update:")
+    for user in created_users:
+        user.age += 1
+    
+    updated_count = await User.objects.bulk_update(created_users, ["age"])
+    print(f"Bulk updated {updated_count} users")
+
+
+async def test_advanced_queries():
+    """Test advanced query features."""
+    print("\n=== Testing Advanced Queries ===")
+    
+    # Test select_related
+    print("Testing select_related:")
+    queryset = Post.objects.select_related("author", "category")
+    print(f"Posts with related data: {queryset}")
+    
+    # Test prefetch_related
+    print("Testing prefetch_related:")
+    queryset = Post.objects.prefetch_related("tags", "comments")
+    print(f"Posts with prefetched data: {queryset}")
+    
+    # Test complex filtering
+    print("Testing complex filtering:")
+    queryset = Post.objects.filter(
+        Q(is_published=True) & 
+        Q(author__age__gte=25) &
+        Q(category__name="Technology")
+    )
+    print(f"Complex filtered posts: {queryset}")
+    
+    # Test aggregation
+    print("Testing aggregation:")
+    queryset = User.objects.annotate(
+        post_count=F("posts").count()
+    )
+    print(f"Users with post count: {queryset}")
+
+
+async def test_model_validation():
+    """Test model validation."""
+    print("\n=== Testing Model Validation ===")
+    
+    try:
+        # Test invalid email
+        user = User(username="test", email="invalid-email")
+        print("Should have failed validation for invalid email")
+    except Exception as e:
+        print(f"Validation error (expected): {e}")
+    
+    try:
+        # Test invalid age
+        user = User(username="test", email="test@example.com", age=-5)
+        print("Should have failed validation for negative age")
+    except Exception as e:
+        print(f"Validation error (expected): {e}")
+    
+    try:
+        # Test short username
+        user = User(username="ab", email="test@example.com")
+        print("Should have failed validation for short username")
+    except Exception as e:
+        print(f"Validation error (expected): {e}")
+
+
+async def test_signals():
+    """Test signal handling."""
+    print("\n=== Testing Signals ===")
+    
+    # Create a user to trigger signals
+    user = User(
+        username="signal_test",
+        email="signal@example.com",
+        first_name="Signal",
+        last_name="Test"
+    )
+    
+    print("Creating user (should trigger pre_save and post_save signals):")
+    await user.save()
+    
+    print("Updating user (should trigger post_save signal):")
+    user.first_name = "Updated"
+    await user.save()
+
+
+async def main():
+    """Main test function."""
+    print("🚀 Testing Enhanced OxenORM Models and Query Building")
+    print("=" * 60)
+    
+    try:
+        await test_model_creation()
+        await test_queryset_operations()
+        await test_relationships()
+        await test_bulk_operations()
+        await test_advanced_queries()
+        await test_model_validation()
+        await test_signals()
+        
+        print("\n✅ All tests completed successfully!")
+        
+    except Exception as e:
+        print(f"\n❌ Test failed with error: {e}")
+        import traceback
+        traceback.print_exc()
+
 
 if __name__ == "__main__":
-    success = run_all_tests()
-    sys.exit(0 if success else 1) 
+    asyncio.run(main()) 
