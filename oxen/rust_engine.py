@@ -29,6 +29,19 @@ class OxenEngine:
         self._rust_engine = RustOxenEngine(connection_string)
         self.connection_string = connection_string
     
+    def configure_pool(self, max_connections: Optional[int] = None, min_connections: Optional[int] = None):
+        """Configure the connection pool settings."""
+        self._rust_engine.configure_pool(max_connections, min_connections)
+    
+    def is_connected(self) -> bool:
+        """Check if connected to the database."""
+        return self._rust_engine.is_connected()
+    
+    async def get_pool_status(self) -> Dict[str, Any]:
+        """Get the connection pool status."""
+        await asyncio.sleep(0.001)  # Small delay to make it async
+        return self._rust_engine.get_pool_status()
+    
     async def connect(self) -> Dict[str, Any]:
         """Connect to the database."""
         # Since our Rust methods are not async, we'll simulate async behavior
@@ -148,6 +161,26 @@ if not RUST_AVAILABLE:
         
         def __init__(self, connection_string: str):
             self.connection_string = connection_string
+        
+        def configure_pool(self, max_connections: Optional[int] = None, min_connections: Optional[int] = None):
+            """Configure the connection pool settings (mock)."""
+            pass
+        
+        def is_connected(self) -> bool:
+            """Check if connected to the database (mock)."""
+            return False
+        
+        async def get_pool_status(self) -> Dict[str, Any]:
+            """Get the connection pool status (mock)."""
+            await asyncio.sleep(0.001)
+            return {
+                "pool_size": 0,
+                "idle_connections": 0,
+                "used_connections": 0,
+                "max_connections": 0,
+                "min_connections": 0,
+                "note": "Mock pool status - Rust engine not available"
+            }
         
         async def connect(self) -> Dict[str, Any]:
             await asyncio.sleep(0.01)  # Simulate async operation

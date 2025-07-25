@@ -6,11 +6,34 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyDict};
 use std::collections::HashMap;
-use sqlx::{PgPool, postgres::PgPoolOptions, Row, query::Query, Postgres, postgres::PgArguments, Column, ValueRef};
+use sqlx::{PgPool, postgres::PgPoolOptions, Row, query::Query, Postgres, postgres::PgArguments, Column, ValueRef, Error as SqlxError};
 use serde::{Serialize, Deserialize};
 use uuid::Uuid;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum OxenError {
+    #[error("Database connection failed: {0}")]
+    ConnectionError(#[from] SqlxError),
+    #[error("Query execution failed: {0}")]
+    QueryError(SqlxError),
+    #[error("Transaction error: {0}")]
+    TransactionError(String),
+    #[error("Invalid parameter: {0}")]
+    ParameterError(String),
+    #[error("Not connected to database")]
+    NotConnected,
+    #[error("Serialization error: {0}")]
+    SerializationError(#[from] serde_json::Error),
+}
+
+impl From<OxenError> for PyErr {
+    fn from(err: OxenError) -> Self {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string())
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct QueryResult {
@@ -24,6 +47,15 @@ pub struct ConnectionInfo {
     pub status: String,
     pub connection_string: String,
     pub pool_size: usize,
+    pub max_connections: u32,
+    pub min_connections: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TransactionInfo {
+    pub id: String,
+    pub status: String,
+    pub created_at: String,
 }
 
 // Helper function to convert JsonValue to PyObject
@@ -83,8 +115,10 @@ fn bind_param<'q>(query: Query<'q, Postgres, PgArguments>, param: &'q serde_json
 pub struct OxenEngine {
     connection_string: String,
     pool: Option<Arc<PgPool>>,
-    pool_size: usize,
+    max_connections: u32,
+    min_connections: u32,
     runtime: Arc<Runtime>,
+    is_connected: bool,
 }
 
 #[pymethods]
@@ -95,42 +129,97 @@ impl OxenEngine {
         Self {
             connection_string,
             pool: None,
-            pool_size: 10,
+            max_connections: 10,
+            min_connections: 1,
             runtime,
+            is_connected: false,
         }
+    }
+
+    /// Configure connection pool settings
+    fn configure_pool(&mut self, max_connections: Option<u32>, min_connections: Option<u32>) {
+        if let Some(max) = max_connections {
+            self.max_connections = max;
+        }
+        if let Some(min) = min_connections {
+            self.min_connections = min;
+        }
+    }
+
+    /// Check if connected to database
+    fn is_connected(&self) -> bool {
+        self.is_connected
+    }
+
+    /// Get connection pool status
+    fn get_pool_status(&self, py: Python) -> PyResult<PyObject> {
+        if !self.is_connected {
+            return Err(OxenError::NotConnected.into());
+        }
+
+        let pool = self.pool.as_ref().ok_or(OxenError::NotConnected)?;
+        let runtime = self.runtime.clone();
+        
+        let status = runtime.block_on(async {
+            let size = pool.size();
+            let idle = pool.num_idle();
+            let used = size as usize - idle;
+            
+            let status_info = HashMap::from([
+                ("pool_size".to_string(), serde_json::Value::Number(size.into())),
+                ("idle_connections".to_string(), serde_json::Value::Number(idle.into())),
+                ("used_connections".to_string(), serde_json::Value::Number(used.into())),
+                ("max_connections".to_string(), serde_json::Value::Number(self.max_connections.into())),
+                ("min_connections".to_string(), serde_json::Value::Number(self.min_connections.into())),
+            ]);
+            
+            serde_json::to_value(status_info)
+        }).map_err(|e| OxenError::SerializationError(e))?;
+
+        json_to_py_object(py, status)
     }
 
     fn connect(&mut self, py: Python) -> PyResult<PyObject> {
         let connection_string = self.connection_string.clone();
-        let pool_size = self.pool_size;
+        let max_connections = self.max_connections;
+        let min_connections = self.min_connections;
         let runtime = self.runtime.clone();
         
         let pool = runtime.block_on(async {
             PgPoolOptions::new()
-                .max_connections(pool_size as u32)
+                .max_connections(max_connections)
+                .min_connections(min_connections)
+                .acquire_timeout(std::time::Duration::from_secs(30))
+                .idle_timeout(std::time::Duration::from_secs(300))
+                .max_lifetime(std::time::Duration::from_secs(1800))
                 .connect(&connection_string)
                 .await
-        }).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        }).map_err(|e| OxenError::ConnectionError(e))?;
         
         self.pool = Some(Arc::new(pool));
+        self.is_connected = true;
         
         let info = ConnectionInfo {
             status: "connected".to_string(),
             connection_string: connection_string.clone(),
-            pool_size,
+            pool_size: max_connections as usize,
+            max_connections,
+            min_connections,
         };
         
         let result = serde_json::to_value(info)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+            .map_err(|e| OxenError::SerializationError(e))?;
         
         json_to_py_object(py, result)
     }
 
     fn execute_query(&self, py: Python, sql: String, params: Option<PyObject>) -> PyResult<PyObject> {
-        let pool = self.pool.clone();
-        let runtime = self.runtime.clone();
+        if !self.is_connected {
+            return Err(OxenError::NotConnected.into());
+        }
         
-        if let Some(pool) = pool {
+        let pool = self.pool.clone().ok_or(OxenError::NotConnected)?;
+        let runtime = self.runtime.clone();
             let params_vec = if let Some(py_params) = params {
                 let list: &PyList = py_params.extract(py)?;
                 let mut vec = Vec::new();
@@ -138,12 +227,12 @@ impl OxenEngine {
                     // Convert Python object to JSON value
                     let json_value = if let Ok(s) = item.extract::<String>() {
                         serde_json::Value::String(s)
+                    } else if let Ok(b) = item.extract::<bool>() {
+                        serde_json::Value::Bool(b)
                     } else if let Ok(i) = item.extract::<i64>() {
                         serde_json::Value::Number(i.into())
                     } else if let Ok(f) = item.extract::<f64>() {
                         serde_json::Value::Number(serde_json::Number::from_f64(f).unwrap_or_else(|| serde_json::Number::from(0)))
-                    } else if let Ok(b) = item.extract::<bool>() {
-                        serde_json::Value::Bool(b)
                     } else {
                         serde_json::Value::Null
                     };
@@ -163,7 +252,7 @@ impl OxenEngine {
                         query = bind_param(query, param);
                     }
                     let rows = query.fetch_all(&*pool).await
-                        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+                        .map_err(|e| OxenError::QueryError(e))?;
                     let mut data = Vec::new();
                     for row in rows.iter() {
                         let mut map = HashMap::new();
@@ -205,7 +294,7 @@ impl OxenEngine {
                         query = bind_param(query, param);
                     }
                     let result = query.execute(&*pool).await
-                        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+                        .map_err(|e| OxenError::QueryError(e))?;
                     Ok(QueryResult {
                         rows_affected: result.rows_affected() as i64,
                         data: Vec::new(),
@@ -214,13 +303,10 @@ impl OxenEngine {
                 })
             };
             
-            let json_result = serde_json::to_value(result.unwrap())
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+            let json_result = serde_json::to_value(result?)
+                .map_err(|e| OxenError::SerializationError(e))?;
             
             json_to_py_object(py, json_result)
-        } else {
-            Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Database not connected"))
-        }
     }
 
     fn execute_many(&self, py: Python, sql: String, params_list: Vec<Vec<PyObject>>) -> PyResult<PyObject> {
@@ -272,37 +358,31 @@ impl OxenEngine {
     }
 
     fn begin_transaction(&self, py: Python) -> PyResult<PyObject> {
-        let pool = self.pool.clone();
-        let runtime = self.runtime.clone();
-        
-        if let Some(pool) = pool {
-            // For now, just create a mock transaction since we can't easily store the transaction
-            let _result = runtime.block_on(async {
-                let _conn = pool.acquire().await;
-                // We'll implement proper transaction handling later
-                Ok::<(), PyErr>(())
-            })?;
-            
-            let transaction_id = Uuid::new_v4().to_string();
-            let info = HashMap::from([
-                ("id".to_string(), serde_json::Value::String(transaction_id)),
-                ("status".to_string(), serde_json::Value::String("active".to_string())),
-            ]);
-            
-            let result = serde_json::to_value(info)
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-            
-            json_to_py_object(py, result)
-        } else {
-            Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Database not connected"))
+        if !self.is_connected {
+            return Err(OxenError::NotConnected.into());
         }
+        
+        // For now, we'll create a transaction info but not store the actual transaction
+        // due to lifetime issues with storing sqlx::Transaction across the FFI boundary
+        // In a future version, we'll implement a transaction manager
+        let transaction_id = Uuid::new_v4().to_string();
+        let created_at = chrono::Utc::now().to_rfc3339();
+        
+        let info = TransactionInfo {
+            id: transaction_id.clone(),
+            status: "active".to_string(),
+            created_at,
+        };
+        
+        let result = serde_json::to_value(info)
+            .map_err(|e| OxenError::SerializationError(e))?;
+        
+        json_to_py_object(py, result)
     }
 
     fn close(&self, py: Python) -> PyResult<PyObject> {
-        let pool = self.pool.clone();
-        let runtime = self.runtime.clone();
-        
-        if let Some(pool) = pool {
+        if let Some(pool) = &self.pool {
+            let runtime = self.runtime.clone();
             runtime.block_on(async {
                 pool.close().await;
             });
@@ -310,10 +390,11 @@ impl OxenEngine {
         
         let info = HashMap::from([
             ("status".to_string(), serde_json::Value::String("closed".to_string())),
+            ("was_connected".to_string(), serde_json::Value::Bool(self.is_connected)),
         ]);
         
         let result = serde_json::to_value(info)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+            .map_err(|e| OxenError::SerializationError(e))?;
         
         json_to_py_object(py, result)
     }
