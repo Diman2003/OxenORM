@@ -30,9 +30,11 @@ OxenORM is a hybrid ORM that combines the developer-friendly Python interface of
 - ✅ **Async Support**: Native async/await throughout the stack
 - ✅ **Transaction Support**: ACID-compliant transactions
 - ✅ **Schema Generation**: Automatic table creation and migration
+- ✅ **Migration System**: Complete file-based migration management
+- ✅ **CLI Tools**: Command-line interface for migration operations
+- ✅ **PostgreSQL Support**: Full PostgreSQL integration with connection pooling
 - ✅ **In-Memory Storage**: Fast development and testing
 - 🔄 **SQLite Support**: Coming soon
-- 🔄 **PostgreSQL Support**: Coming soon
 - 🔄 **MySQL Support**: Coming soon
 
 ## 🚀 Quick Start
@@ -227,20 +229,58 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+### Migration Management
+
+OxenORM includes a comprehensive migration system with CLI tools:
+
+```bash
+# Check migration status
+oxen migrate status
+
+# Create a new migration
+oxen migrate create "Add users table" \
+    --up-sql "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(100));" \
+    --down-sql "DROP TABLE users;" \
+    --author "john.doe"
+
+# Run pending migrations
+oxen migrate run
+
+# View migration history
+oxen migrate history
+
+# Rollback to previous version
+oxen migrate rollback 20231201120000
+```
+
+### PostgreSQL Integration
+
+```python
+from oxen.rust_engine import OxenEngine
+
+# Connect to PostgreSQL
+engine = OxenEngine("postgresql://user:pass@localhost/db")
+engine.configure_pool(max_connections=10, min_connections=2)
+await engine.connect()
+
+# Execute queries
+result = await engine.execute_query("SELECT * FROM users WHERE active = $1", [True])
+```
+
 ## 🔧 Configuration
 
 ### Database URLs
 
-OxenORM uses the `rust://` scheme to identify the Rust backend:
+OxenORM supports multiple database backends:
 
 ```python
-# In-memory database
+# Tortoise ORM integration (in-memory)
 db_url = "rust://localhost/memory"
 
-# File-based database (coming soon)
-db_url = "rust://localhost/path/to/database.db"
+# Direct PostgreSQL connection
+db_url = "postgresql://user:pass@host:port/database"
 
-# Remote database (coming soon)
+# Tortoise ORM with PostgreSQL
 db_url = "rust://user:pass@host:port/database"
 ```
 
@@ -260,7 +300,17 @@ await Tortoise.init(
 ### Run Integration Tests
 
 ```bash
+# Test Tortoise ORM integration
 python test_tortoise_rust_integration.py
+
+# Test migration system
+python test_migration_system.py
+
+# Test CLI tools
+python test_cli.py
+
+# Test PostgreSQL integration
+python test_real_database.py
 ```
 
 ### Test Coverage
@@ -271,7 +321,10 @@ The test suite covers:
 - ✅ CRUD operations (Create, Read, Update, Delete)
 - ✅ Query filtering and relationships
 - ✅ Transaction support
-- ✅ Error handling
+- ✅ Migration system (create, run, rollback, validate)
+- ✅ CLI tools and command parsing
+- ✅ PostgreSQL integration and connection pooling
+- ✅ Error handling and validation
 
 ## 🏗️ Development
 
@@ -288,10 +341,19 @@ OxenORM/
 │   ├── __init__.py
 │   ├── rust_backend.py           # Tortoise backend adapter
 │   ├── rust_engine.py            # Python-Rust bridge
-│   └── tortoise_integration.py   # Integration utilities
+│   ├── tortoise_integration.py   # Integration utilities
+│   ├── cli.py                    # CLI tools
+│   └── migrations/               # Migration system
+│       ├── __init__.py
+│       ├── engine.py             # Migration engine
+│       ├── generator.py          # Migration generation
+│       ├── runner.py             # Migration execution
+│       ├── schema.py             # Schema inspection
+│       └── models.py             # Migration models
 ├── tests/                        # Test suite
 ├── examples/                     # Usage examples
 ├── docs/                         # Documentation
+├── test_*.py                     # Integration tests
 └── Cargo.toml                    # Rust dependencies
 ```
 
@@ -320,6 +382,47 @@ OxenORM/
 4. Push to the branch: `git push origin feature/amazing-feature`
 5. Open a Pull Request
 
+## 🛠️ CLI Tools
+
+OxenORM includes a comprehensive command-line interface for migration management:
+
+### Installation
+
+The CLI is included with OxenORM and available as the `oxen` command:
+
+```bash
+# Check if CLI is available
+oxen --help
+
+# View migration commands
+oxen migrate --help
+```
+
+### Available Commands
+
+- **`oxen migrate status`** - Check migration status with multiple output formats
+- **`oxen migrate create`** - Create new migrations with inline SQL or files
+- **`oxen migrate run`** - Execute pending migrations with dry-run support
+- **`oxen migrate rollback`** - Rollback migrations to previous versions
+- **`oxen migrate history`** - View migration history and execution details
+- **`oxen migrate validate`** - Validate migration files and dependencies
+
+### Examples
+
+```bash
+# Check status in JSON format for scripting
+oxen migrate status --format json
+
+# Create migration from SQL file
+oxen migrate create "Add user profiles" --file migration.sql
+
+# Dry run to see what would be executed
+oxen migrate run --dry-run
+
+# Rollback with confirmation
+oxen migrate rollback 20231201120000 --dry-run
+```
+
 ## 📊 Performance
 
 ### Benchmarks
@@ -341,21 +444,26 @@ OxenORM/
 - [x] Transaction support
 - [x] Schema generation
 
-### Phase 2: Storage Backends 🔄
+### Phase 2: Storage Backends ✅
+- [x] PostgreSQL backend with connection pooling
+- [x] In-memory storage
 - [ ] SQLite backend
-- [ ] PostgreSQL backend
 - [ ] MySQL backend
-- [ ] Connection pooling
 
-### Phase 3: Advanced Features 📋
-- [ ] Query optimization
+### Phase 3: Advanced Features ✅
+- [x] Migration system with file-based storage
+- [x] CLI tools for migration management
+- [x] Schema inspection and diff generation
+- [x] Migration validation and dry-run support
+- [x] Query optimization
 - [ ] Indexing support
-- [ ] Migration system
 - [ ] Bulk operations
 - [ ] Relationship optimization
 
-### Phase 4: Production Ready 🚀
-- [ ] Performance benchmarks
+### Phase 4: Production Ready 🔄
+- [x] Performance testing with real PostgreSQL
+- [x] Comprehensive test coverage
+- [x] Error handling and validation
 - [ ] Production deployment guides
 - [ ] Monitoring and logging
 - [ ] Security hardening

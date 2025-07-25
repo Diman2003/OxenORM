@@ -14,6 +14,9 @@ dependencies = [
     "typing-extensions>=4.0.0",
 ]
 
+[project.scripts]
+oxen = "oxen.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
