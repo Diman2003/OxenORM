@@ -1,0 +1,171 @@
+line-length = 100
+target-version = "py39"
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "N",   # pep8-naming
+    "S",   # bandit
+    "A",   # flake8-builtins
+    "COM", # flake8-commas
+    "T20", # flake8-print
+    "TCH", # flake8-type-checking
+    "ARG", # flake8-unused-arguments
+    "PIE", # flake8-pie
+    "SIM", # flake8-simplify
+    "TID", # flake8-tidy-imports
+    "TCH", # flake8-type-checking
+    "Q",   # flake8-quotes
+    "RSE", # flake8-raise
+    "RET", # flake8-return
+    "SLF", # flake8-self
+    "SLOT", # flake8-slots
+    "TRY", # tryceratops
+    "NPY", # numpy
+    "AIR", # flake8-airflow
+    "PERF", # perflint
+    "FBT", # flake8-boolean-trap
+    "LOG", # flake8-logging-format
+    "PTH", # use-pathlib
+    "ERA", # eradicate
+    "PD",  # pandas-vet
+    "PGH", # pygrep-hooks
+    "PL",  # pylint
+    "PT",  # flake8-pytest-style
+    "PYI", # flake8-pyi
+    "PYT", # flake8-pytest
+    "Q",   # flake8-quotes
+    "RSE", # flake8-raise
+    "RET", # flake8-return
+    "SLF", # flake8-self
+    "SLOT", # flake8-slots
+    "SIM", # flake8-simplify
+    "TID", # flake8-tidy-imports
+    "TCH", # flake8-type-checking
+    "ARG", # flake8-unused-arguments
+    "PIE", # flake8-pie
+    "T20", # flake8-print
+    "COM", # flake8-commas
+    "A",   # flake8-builtins
+    "S",   # bandit
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "C4",  # flake8-comprehensions
+    "B",   # flake8-bugbear
+    "I",   # isort
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "E",   # pycodestyle errors
+]
+
+ignore = [
+    "E501",  # line too long, handled by black
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+    "PLR0913", # too many arguments
+    "PLR0912", # too many branches
+    "PLR0915", # too many statements
+    "PLR0911", # too many return statements
+    "PLR2004", # magic value used in comparison
+    "PLR0904", # too many public methods
+    "PLR0902", # too many instance attributes
+    "PLR0903", # too few public methods
+    "PLR0901", # too many ancestors
+    "PLR0900", # too many public methods
+    "PLR0916", # too many boolean expressions
+    "PLR0917", # too many boolean expressions
+    "PLR0918", # too many boolean expressions
+    "PLR0919", # too many boolean expressions
+    "PLR0920", # too many boolean expressions
+    "PLR0921", # too many boolean expressions
+    "PLR0922", # too many boolean expressions
+    "PLR0923", # too many boolean expressions
+    "PLR0924", # too many boolean expressions
+    "PLR0925", # too many boolean expressions
+    "PLR0926", # too many boolean expressions
+    "PLR0927", # too many boolean expressions
+    "PLR0928", # too many boolean expressions
+    "PLR0929", # too many boolean expressions
+    "PLR0930", # too many boolean expressions
+    "PLR0931", # too many boolean expressions
+    "PLR0932", # too many boolean expressions
+    "PLR0933", # too many boolean expressions
+    "PLR0934", # too many boolean expressions
+    "PLR0935", # too many boolean expressions
+    "PLR0936", # too many boolean expressions
+    "PLR0937", # too many boolean expressions
+    "PLR0938", # too many boolean expressions
+    "PLR0939", # too many boolean expressions
+    "PLR0940", # too many boolean expressions
+    "PLR0941", # too many boolean expressions
+    "PLR0942", # too many boolean expressions
+    "PLR0943", # too many boolean expressions
+    "PLR0944", # too many boolean expressions
+    "PLR0945", # too many boolean expressions
+    "PLR0946", # too many boolean expressions
+    "PLR0947", # too many boolean expressions
+    "PLR0948", # too many boolean expressions
+    "PLR0949", # too many boolean expressions
+    "PLR0950", # too many boolean expressions
+    "PLR0951", # too many boolean expressions
+    "PLR0952", # too many boolean expressions
+    "PLR0953", # too many boolean expressions
+    "PLR0954", # too many boolean expressions
+    "PLR0955", # too many boolean expressions
+    "PLR0956", # too many boolean expressions
+    "PLR0957", # too many boolean expressions
+    "PLR0958", # too many boolean expressions
+    "PLR0959", # too many boolean expressions
+    "PLR0960", # too many boolean expressions
+    "PLR0961", # too many boolean expressions
+    "PLR0962", # too many boolean expressions
+    "PLR0963", # too many boolean expressions
+    "PLR0964", # too many boolean expressions
+    "PLR0965", # too many boolean expressions
+    "PLR0966", # too many boolean expressions
+    "PLR0967", # too many boolean expressions
+    "PLR0968", # too many boolean expressions
+    "PLR0969", # too many boolean expressions
+    "PLR0970", # too many boolean expressions
+    "PLR0971", # too many boolean expressions
+    "PLR0972", # too many boolean expressions
+    "PLR0973", # too many boolean expressions
+    "PLR0974", # too many boolean expressions
+    "PLR0975", # too many boolean expressions
+    "PLR0976", # too many boolean expressions
+    "PLR0977", # too many boolean expressions
+    "PLR0978", # too many boolean expressions
+    "PLR0979", # too many boolean expressions
+    "PLR0980", # too many boolean expressions
+    "PLR0981", # too many boolean expressions
+    "PLR0982", # too many boolean expressions
+    "PLR0983", # too many boolean expressions
+    "PLR0984", # too many boolean expressions
+    "PLR0985", # too many boolean expressions
+    "PLR0986", # too many boolean expressions
+    "PLR0987", # too many boolean expressions
+    "PLR0988", # too many boolean expressions
+    "PLR0989", # too many boolean expressions
+    "PLR0990", # too many boolean expressions
+    "PLR0991", # too many boolean expressions
+    "PLR0992", # too many boolean expressions
+    "PLR0993", # too many boolean expressions
+    "PLR0994", # too many boolean expressions
+    "PLR0995", # too many boolean expressions
+    "PLR0996", # too many boolean expressions
+    "PLR0997", # too many boolean expressions
+    "PLR0998", # too many boolean expressions
+    "PLR0999", # too many boolean expressions
+]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto" 
