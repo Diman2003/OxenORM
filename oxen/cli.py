@@ -19,6 +19,7 @@ try:
     from oxen.rust_engine import OxenEngine
     from oxen.multi_db_engine import MultiDbEngine, DatabaseSwitcher, DatabaseType
     from oxen.migrations import MigrationEngine, Migration, MigrationStatus
+    from oxen.migrations.enhanced_engine import EnhancedMigrationEngine, MigrationConfig
     RUST_AVAILABLE = True
 except ImportError as e:
     print(f"❌ Required modules not available: {e}")
@@ -224,6 +225,94 @@ Examples:
         validate_parser.add_argument(
             '--migration',
             help='Specific migration to validate (default: validate all)'
+        )
+
+        # migrate makemigrations (enhanced)
+        makemigrations_parser = migrate_subparsers.add_parser(
+            'makemigrations',
+            help='Generate migrations from model changes'
+        )
+        makemigrations_parser.add_argument(
+            'description',
+            help='Migration description'
+        )
+        makemigrations_parser.add_argument(
+            '--author',
+            help='Migration author'
+        )
+        makemigrations_parser.add_argument(
+            '--models',
+            nargs='+',
+            help='Model classes to analyze for changes'
+        )
+        makemigrations_parser.add_argument(
+            '--detect-changes',
+            action='store_true',
+            default=True,
+            help='Automatically detect schema changes (default: True)'
+        )
+        makemigrations_parser.add_argument(
+            '--initial',
+            action='store_true',
+            help='Generate initial migration from models'
+        )
+
+        # migrate plan
+        plan_parser = migrate_subparsers.add_parser(
+            'plan',
+            help='Show migration execution plan'
+        )
+        plan_parser.add_argument(
+            '--target',
+            help='Target migration version'
+        )
+
+        # migrate rollback-plan
+        rollback_plan_parser = migrate_subparsers.add_parser(
+            'rollback-plan',
+            help='Show rollback plan'
+        )
+        rollback_plan_parser.add_argument(
+            'target_version',
+            help='Target version to rollback to'
+        )
+
+        # migrate safety-check
+        safety_parser = migrate_subparsers.add_parser(
+            'safety-check',
+            help='Check migration for dangerous operations'
+        )
+        safety_parser.add_argument(
+            '--migration',
+            help='Specific migration to check (default: check all)'
+        )
+
+        # migrate schema
+        schema_parser = migrate_subparsers.add_parser(
+            'schema',
+            help='Schema management commands'
+        )
+        schema_subparsers = schema_parser.add_subparsers(
+            dest='schema_command',
+            help='Schema subcommands'
+        )
+
+        # migrate schema show
+        schema_show_parser = schema_subparsers.add_parser(
+            'show',
+            help='Show current database schema'
+        )
+
+        # migrate schema generate
+        schema_generate_parser = schema_subparsers.add_parser(
+            'generate',
+            help='Generate SQL from models'
+        )
+        schema_generate_parser.add_argument(
+            '--models',
+            nargs='+',
+            required=True,
+            help='Model classes to generate SQL for'
         )
 
         return parser
@@ -524,18 +613,234 @@ Examples:
 
     def _print_validation_result(self, migration: Migration, validation: dict):
         """Print validation result for a migration."""
-        print(f"📋 Migration: {migration.name} (v{migration.version})")
-        
-        if validation['valid']:
-            print("  ✅ Valid")
-        else:
-            print("  ❌ Invalid")
-            for error in validation['errors']:
-                print(f"    ❌ {error}")
+        print(f"\n📋 Migration: {migration.name} ({migration.version})")
+        print(f"   Status: {'✅ Valid' if validation['is_valid'] else '❌ Invalid'}")
         
         if validation['warnings']:
+            print("   ⚠️  Warnings:")
             for warning in validation['warnings']:
-                print(f"    ⚠️  {warning}")
+                print(f"      - {warning}")
+        
+        if validation['errors']:
+            print("   ❌ Errors:")
+            for error in validation['errors']:
+                print(f"      - {error}")
+
+    async def cmd_migrate_makemigrations(self, args):
+        """Handle 'migrate makemigrations' command."""
+        print("🆕 Generating Migration")
+        print("=" * 40)
+
+        try:
+            # Initialize enhanced migration engine
+            config = MigrationConfig(
+                migrations_dir=self.parser.parse_args().migrations_dir,
+                validate_before_run=True
+            )
+            enhanced_engine = EnhancedMigrationEngine(self.engine, config)
+
+            # Generate migration
+            if args.initial:
+                # Generate initial migration from models
+                if not args.models:
+                    print("❌ --models argument is required for initial migration")
+                    return
+                
+                # Import models (simplified - in real implementation, you'd need proper model loading)
+                models = []  # TODO: Load models from args.models
+                migration = await enhanced_engine.makemigrations_initial(
+                    models, args.description, args.author
+                )
+            else:
+                # Generate migration from changes
+                models = []  # TODO: Load models from args.models if provided
+                migration = await enhanced_engine.makemigrations(
+                    models, args.description, args.author, args.detect_changes
+                )
+
+            print(f"✅ Migration generated successfully!")
+            print(f"📁 File: {migration.name}")
+            print(f"🆔 Version: {migration.version}")
+            print(f"📝 Description: {migration.description}")
+            if migration.author:
+                print(f"👤 Author: {migration.author}")
+
+        except Exception as e:
+            print(f"❌ Failed to generate migration: {e}")
+
+    async def cmd_migrate_plan(self, args):
+        """Handle 'migrate plan' command."""
+        print("📋 Migration Execution Plan")
+        print("=" * 40)
+
+        try:
+            config = MigrationConfig(
+                migrations_dir=self.parser.parse_args().migrations_dir
+            )
+            enhanced_engine = EnhancedMigrationEngine(self.engine, config)
+
+            plan = await enhanced_engine.showmigrations_plan(args.target)
+            
+            if not plan['migrations_to_run']:
+                print("✅ No pending migrations to run.")
+                return
+
+            print(f"📊 Would execute {plan['total_count']} migrations:")
+            print()
+            
+            for migration in plan['migrations_to_run']:
+                print(f"  ▶️  {migration['version']}: {migration['name']}")
+                if migration['description']:
+                    print(f"     📝 {migration['description']}")
+                if migration['dependencies']:
+                    print(f"     🔗 Dependencies: {', '.join(migration['dependencies'])}")
+                print()
+
+            if plan['dependency_plan']['conflicts']:
+                print("⚠️  Dependency conflicts:")
+                for conflict in plan['dependency_plan']['conflicts']:
+                    print(f"   - {conflict}")
+
+        except Exception as e:
+            print(f"❌ Failed to generate plan: {e}")
+
+    async def cmd_migrate_rollback_plan(self, args):
+        """Handle 'migrate rollback-plan' command."""
+        print("📋 Migration Rollback Plan")
+        print("=" * 40)
+
+        try:
+            config = MigrationConfig(
+                migrations_dir=self.parser.parse_args().migrations_dir
+            )
+            enhanced_engine = EnhancedMigrationEngine(self.engine, config)
+
+            plan = await enhanced_engine.showmigrations_rollback_plan(args.target_version)
+            
+            if not plan['migrations_to_rollback']:
+                print("✅ No migrations to rollback.")
+                return
+
+            print(f"📊 Would rollback {plan['total_count']} migrations:")
+            print()
+            
+            for migration in plan['migrations_to_rollback']:
+                print(f"  ⏪ {migration['version']}: {migration['name']}")
+                if migration['description']:
+                    print(f"     📝 {migration['description']}")
+                print()
+
+        except Exception as e:
+            print(f"❌ Failed to generate rollback plan: {e}")
+
+    async def cmd_migrate_safety_check(self, args):
+        """Handle 'migrate safety-check' command."""
+        print("🔒 Migration Safety Check")
+        print("=" * 40)
+
+        try:
+            config = MigrationConfig(
+                migrations_dir=self.parser.parse_args().migrations_dir
+            )
+            enhanced_engine = EnhancedMigrationEngine(self.engine, config)
+
+            if args.migration:
+                # Check specific migration
+                migration = enhanced_engine.get_migration_by_version(args.migration)
+                if not migration:
+                    print(f"❌ Migration {args.migration} not found")
+                    return
+                
+                safety = await enhanced_engine.check_migration_safety(migration)
+                self._print_safety_result(migration, safety)
+            else:
+                # Check all migrations
+                migration_files = enhanced_engine.list_migrations()
+                if not migration_files:
+                    print("No migration files found.")
+                    return
+
+                for filepath in migration_files:
+                    try:
+                        migration = enhanced_engine.generator.load_migration(filepath)
+                        safety = await enhanced_engine.check_migration_safety(migration)
+                        self._print_safety_result(migration, safety)
+                    except Exception as e:
+                        print(f"❌ Error checking {filepath}: {e}")
+
+        except Exception as e:
+            print(f"❌ Failed to perform safety check: {e}")
+
+    def _print_safety_result(self, migration: Migration, safety: dict):
+        """Print safety check result for a migration."""
+        print(f"\n📋 Migration: {migration.name} ({migration.version})")
+        print(f"   Safety: {'✅ Safe' if safety['is_safe'] else '❌ Unsafe'}")
+        
+        if safety['warnings']:
+            print("   ⚠️  Warnings:")
+            for warning in safety['warnings']:
+                print(f"      - {warning}")
+        
+        if safety['dangerous_operations']:
+            print("   🚨 Dangerous Operations:")
+            for op in safety['dangerous_operations']:
+                print(f"      - {op}")
+
+    async def cmd_migrate_schema_show(self, args):
+        """Handle 'migrate schema show' command."""
+        print("📊 Current Database Schema")
+        print("=" * 40)
+
+        try:
+            config = MigrationConfig(
+                migrations_dir=self.parser.parse_args().migrations_dir
+            )
+            enhanced_engine = EnhancedMigrationEngine(self.engine, config)
+
+            schema = await enhanced_engine.get_current_schema()
+            
+            if not schema:
+                print("No tables found in database.")
+                return
+
+            for table_name, table_schema in schema.items():
+                print(f"\n📋 Table: {table_name}")
+                print("   Columns:")
+                for column_name, column_info in table_schema.items():
+                    print(f"     - {column_name}: {column_info.get('type', 'unknown')}")
+                    if column_info.get('primary_key'):
+                        print("       (Primary Key)")
+                    if column_info.get('unique'):
+                        print("       (Unique)")
+                    if column_info.get('nullable') is False:
+                        print("       (Not Null)")
+
+        except Exception as e:
+            print(f"❌ Failed to show schema: {e}")
+
+    async def cmd_migrate_schema_generate(self, args):
+        """Handle 'migrate schema generate' command."""
+        print("🔧 Generating SQL from Models")
+        print("=" * 40)
+
+        try:
+            config = MigrationConfig(
+                migrations_dir=self.parser.parse_args().migrations_dir
+            )
+            enhanced_engine = EnhancedMigrationEngine(self.engine, config)
+
+            # Import models (simplified - in real implementation, you'd need proper model loading)
+            models = []  # TODO: Load models from args.models
+            
+            sql = await enhanced_engine.generate_schema_sql(models)
+            
+            print("Generated SQL:")
+            print("-" * 40)
+            print(sql)
+            print("-" * 40)
+
+        except Exception as e:
+            print(f"❌ Failed to generate SQL: {e}")
 
     async def cmd_db_test(self, args):
         """Handle 'db test' command."""
@@ -639,6 +944,25 @@ Examples:
                     await self.cmd_migrate_history(parsed_args)
                 elif parsed_args.migrate_command == 'validate':
                     await self.cmd_migrate_validate(parsed_args)
+                elif parsed_args.migrate_command == 'makemigrations':
+                    await self.cmd_migrate_makemigrations(parsed_args)
+                elif parsed_args.migrate_command == 'plan':
+                    await self.cmd_migrate_plan(parsed_args)
+                elif parsed_args.migrate_command == 'rollback-plan':
+                    await self.cmd_migrate_rollback_plan(parsed_args)
+                elif parsed_args.migrate_command == 'safety-check':
+                    await self.cmd_migrate_safety_check(parsed_args)
+                elif parsed_args.migrate_command == 'schema':
+                    if not parsed_args.schema_command:
+                        print("❌ Schema subcommand is required.")
+                        print("Use 'oxen migrate schema --help' for available subcommands.")
+                        return
+                    if parsed_args.schema_command == 'show':
+                        await self.cmd_migrate_schema_show(parsed_args)
+                    elif parsed_args.schema_command == 'generate':
+                        await self.cmd_migrate_schema_generate(parsed_args)
+                    else:
+                        print(f"❌ Unknown schema command: {parsed_args.schema_command}")
                 else:
                     print(f"❌ Unknown migration command: {parsed_args.migrate_command}")
             finally:
