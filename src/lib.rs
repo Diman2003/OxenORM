@@ -20,6 +20,12 @@ use uuid::Uuid;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 use thiserror::Error;
+use pyo3::wrap_pyfunction;
+use std::fs;
+use std::path::Path;
+use std::io::{Read, Write};
+use image::{DynamicImage, GenericImageView};
+use image::imageops::{resize, blur, brighten, contrast};
 
 #[derive(Error, Debug)]
 pub enum OxenError {
@@ -776,9 +782,235 @@ impl OxenTransaction {
     }
 }
 
+#[pyfunction]
+fn read_file(path: &str) -> PyResult<Vec<u8>> {
+    let mut file = fs::File::open(path)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    let mut contents = Vec::new();
+    file.read_to_end(&mut contents)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    Ok(contents)
+}
+
+#[pyfunction]
+fn write_file(path: &str, data: &[u8]) -> PyResult<()> {
+    let mut file = fs::File::create(path)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    file.write_all(data)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    Ok(())
+}
+
+#[pyfunction]
+fn file_exists(path: &str) -> PyResult<bool> {
+    Ok(Path::new(path).exists())
+}
+
+#[pyfunction]
+fn delete_file(path: &str) -> PyResult<()> {
+    fs::remove_file(path)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    Ok(())
+}
+
+#[pyfunction]
+fn get_file_size(path: &str) -> PyResult<u64> {
+    let metadata = fs::metadata(path)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    Ok(metadata.len())
+}
+
+#[pyfunction]
+fn create_directory(path: &str) -> PyResult<()> {
+    fs::create_dir_all(path)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    Ok(())
+}
+
+#[pyfunction]
+fn list_directory(path: &str) -> PyResult<Vec<String>> {
+    let entries = fs::read_dir(path)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    let mut files = Vec::new();
+    for entry in entries {
+        if let Ok(entry) = entry {
+            if let Ok(name) = entry.file_name().into_string() {
+                files.push(name);
+            }
+        }
+    }
+    
+    Ok(files)
+}
+
+// Image operations
+#[pyfunction]
+fn load_image(path: &str) -> PyResult<Vec<u8>> {
+    let img = image::open(path)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    let mut buffer = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut buffer), image::ImageFormat::Png)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    Ok(buffer)
+}
+
+#[pyfunction]
+fn save_image(path: &str, data: &[u8]) -> PyResult<()> {
+    let img = image::load_from_memory(data)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    img.save(path)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    Ok(())
+}
+
+#[pyfunction]
+fn resize_image(data: &[u8], width: u32, height: u32) -> PyResult<Vec<u8>> {
+    let img = image::load_from_memory(data)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    let resized = resize(&img, width, height, image::imageops::FilterType::Lanczos3);
+    
+    let mut buffer = Vec::new();
+    resized.write_to(&mut std::io::Cursor::new(&mut buffer), image::ImageFormat::Png)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    Ok(buffer)
+}
+
+#[pyfunction]
+fn blur_image(data: &[u8], sigma: f32) -> PyResult<Vec<u8>> {
+    let img = image::load_from_memory(data)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    let blurred = blur(&img, sigma);
+    
+    let mut buffer = Vec::new();
+    blurred.write_to(&mut std::io::Cursor::new(&mut buffer), image::ImageFormat::Png)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    Ok(buffer)
+}
+
+#[pyfunction]
+fn brighten_image(data: &[u8], value: i32) -> PyResult<Vec<u8>> {
+    let img = image::load_from_memory(data)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    let brightened = brighten(&img, value);
+    
+    let mut buffer = Vec::new();
+    brightened.write_to(&mut std::io::Cursor::new(&mut buffer), image::ImageFormat::Png)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    Ok(buffer)
+}
+
+#[pyfunction]
+fn contrast_image(data: &[u8], contrast_value: f32) -> PyResult<Vec<u8>> {
+    let img = image::load_from_memory(data)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    let contrasted = contrast(&img, contrast_value);
+    
+    let mut buffer = Vec::new();
+    contrasted.write_to(&mut std::io::Cursor::new(&mut buffer), image::ImageFormat::Png)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    Ok(buffer)
+}
+
+#[pyfunction]
+fn get_image_info(data: &[u8]) -> PyResult<(u32, u32, String)> {
+    let img = image::load_from_memory(data)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    let (width, height) = img.dimensions();
+    let format = match img {
+        DynamicImage::ImageRgb8(_) => "RGB",
+        DynamicImage::ImageRgba8(_) => "RGBA",
+        DynamicImage::ImageLuma8(_) => "L",
+        DynamicImage::ImageLumaA8(_) => "LA",
+        _ => "Unknown",
+    };
+    
+    Ok((width, height, format.to_string()))
+}
+
+#[pyfunction]
+fn convert_image_format(data: &[u8], format: &str) -> PyResult<Vec<u8>> {
+    let img = image::load_from_memory(data)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    let image_format = match format.to_lowercase().as_str() {
+        "png" => image::ImageFormat::Png,
+        "jpg" | "jpeg" => image::ImageFormat::Jpeg,
+        "gif" => image::ImageFormat::Gif,
+        "bmp" => image::ImageFormat::Bmp,
+        "webp" => image::ImageFormat::WebP,
+        _ => return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("Unsupported format")),
+    };
+    
+    let mut buffer = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut buffer), image_format)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    Ok(buffer)
+}
+
+#[pyfunction]
+fn create_thumbnail(data: &[u8], max_size: u32) -> PyResult<Vec<u8>> {
+    let img = image::load_from_memory(data)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    let (width, height) = img.dimensions();
+    let (new_width, new_height) = if width > height {
+        (max_size, (height * max_size) / width)
+    } else {
+        ((width * max_size) / height, max_size)
+    };
+    
+    let thumbnail = resize(&img, new_width, new_height, image::imageops::FilterType::Lanczos3);
+    
+    let mut buffer = Vec::new();
+    thumbnail.write_to(&mut std::io::Cursor::new(&mut buffer), image::ImageFormat::Png)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    
+    Ok(buffer)
+}
+
 #[pymodule]
 fn oxen_engine(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<OxenEngine>()?;
     m.add_class::<OxenTransaction>()?;
+    
+    // File operations
+    m.add_function(wrap_pyfunction!(read_file, m)?)?;
+    m.add_function(wrap_pyfunction!(write_file, m)?)?;
+    m.add_function(wrap_pyfunction!(file_exists, m)?)?;
+    m.add_function(wrap_pyfunction!(delete_file, m)?)?;
+    m.add_function(wrap_pyfunction!(get_file_size, m)?)?;
+    m.add_function(wrap_pyfunction!(create_directory, m)?)?;
+    m.add_function(wrap_pyfunction!(list_directory, m)?)?;
+    
+    // Image operations
+    m.add_function(wrap_pyfunction!(load_image, m)?)?;
+    m.add_function(wrap_pyfunction!(save_image, m)?)?;
+    m.add_function(wrap_pyfunction!(resize_image, m)?)?;
+    m.add_function(wrap_pyfunction!(blur_image, m)?)?;
+    m.add_function(wrap_pyfunction!(brighten_image, m)?)?;
+    m.add_function(wrap_pyfunction!(contrast_image, m)?)?;
+    m.add_function(wrap_pyfunction!(get_image_info, m)?)?;
+    m.add_function(wrap_pyfunction!(convert_image_format, m)?)?;
+    m.add_function(wrap_pyfunction!(create_thumbnail, m)?)?;
+    
     Ok(())
 } 

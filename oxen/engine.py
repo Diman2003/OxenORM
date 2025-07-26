@@ -333,4 +333,31 @@ async def close_all_engines():
     """Close all registered engines."""
     for engine in _engines.values():
         await engine.disconnect()
-    _engines.clear() 
+    _engines.clear()
+
+
+# Global connection functions
+async def connect(connection_string: str, use_rust: bool = True) -> UnifiedEngine:
+    """
+    Connect to a database using the unified engine.
+    
+    Args:
+        connection_string: Database connection string
+        use_rust: Whether to use Rust backend (default: True)
+    
+    Returns:
+        UnifiedEngine instance
+    """
+    engine = create_engine(connection_string, use_rust)
+    await engine.connect()
+    return engine
+
+
+async def disconnect(engine: UnifiedEngine):
+    """
+    Disconnect from a database.
+    
+    Args:
+        engine: UnifiedEngine instance to disconnect
+    """
+    await engine.disconnect() 

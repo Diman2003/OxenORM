@@ -2,7 +2,7 @@
 Data field types for OxenORM
 """
 
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, List, Tuple, Dict
 from datetime import datetime, date, time
 from decimal import Decimal
 import uuid
@@ -403,3 +403,348 @@ class SlugField(CharField):
             if not re.match(slug_pattern, value):
                 raise ValidationError(f"Invalid slug format: {value}")
         return value 
+
+class FileField(Field):
+    """
+    File field for storing and managing file data with Rust backend operations.
+    
+    Supports file read/write operations, file management, and metadata.
+    """
+    
+    def __init__(self, upload_to: str = "uploads/", max_size: int = 10 * 1024 * 1024, 
+                 allowed_extensions: List[str] = None, **kwargs):
+        super().__init__(**kwargs)
+        self.upload_to = upload_to
+        self.max_size = max_size  # 10MB default
+        self.allowed_extensions = allowed_extensions or []
+        self.storage_path = None
+        
+    def to_db_value(self, value, instance):
+        """Convert file path or bytes to database storage format."""
+        if value is None:
+            return None
+            
+        if isinstance(value, str):
+            # File path - read the file
+            return self._read_file_bytes(value)
+        elif isinstance(value, bytes):
+            # Already bytes
+            return value
+        else:
+            raise ValueError(f"FileField expects string path or bytes, got {type(value)}")
+    
+    def to_python_value(self, value, instance):
+        """Convert database value back to file path."""
+        if value is None:
+            return None
+            
+        if isinstance(value, bytes):
+            # Save to temporary file and return path
+            return self._save_temp_file(value)
+        return value
+    
+    def _read_file_bytes(self, file_path: str) -> bytes:
+        """Read file using Rust backend."""
+        try:
+            import oxen_engine
+            return oxen_engine.read_file(file_path)
+        except ImportError:
+            # Fallback to Python
+            with open(file_path, 'rb') as f:
+                return f.read()
+    
+    def _save_temp_file(self, data: bytes) -> str:
+        """Save bytes to temporary file and return path."""
+        import tempfile
+        import os
+        
+        # Create upload directory if it doesn't exist
+        os.makedirs(self.upload_to, exist_ok=True)
+        
+        # Generate unique filename
+        import uuid
+        filename = f"{uuid.uuid4()}.tmp"
+        file_path = os.path.join(self.upload_to, filename)
+        
+        try:
+            import oxen_engine
+            oxen_engine.write_file(file_path, data)
+        except ImportError:
+            # Fallback to Python
+            with open(file_path, 'wb') as f:
+                f.write(data)
+        
+        return file_path
+    
+    def validate(self, value):
+        """Validate file data."""
+        if value is None:
+            return
+            
+        if isinstance(value, str):
+            # Check if file exists
+            if not self._file_exists(value):
+                raise ValueError(f"File does not exist: {value}")
+            
+            # Check file size
+            file_size = self._get_file_size(value)
+            if file_size > self.max_size:
+                raise ValueError(f"File too large: {file_size} bytes (max: {self.max_size})")
+            
+            # Check extension
+            if self.allowed_extensions:
+                ext = os.path.splitext(value)[1].lower()
+                if ext not in self.allowed_extensions:
+                    raise ValueError(f"File extension not allowed: {ext}")
+        
+        elif isinstance(value, bytes):
+            # Check size
+            if len(value) > self.max_size:
+                raise ValueError(f"File too large: {len(value)} bytes (max: {self.max_size})")
+    
+    def _file_exists(self, path: str) -> bool:
+        """Check if file exists using Rust backend."""
+        try:
+            import oxen_engine
+            return oxen_engine.file_exists(path)
+        except ImportError:
+            return os.path.exists(path)
+    
+    def _get_file_size(self, path: str) -> int:
+        """Get file size using Rust backend."""
+        try:
+            import oxen_engine
+            return oxen_engine.get_file_size(path)
+        except ImportError:
+            return os.path.getsize(path)
+    
+    def delete_file(self, file_path: str):
+        """Delete file using Rust backend."""
+        try:
+            import oxen_engine
+            oxen_engine.delete_file(file_path)
+        except ImportError:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+    
+    def _validate(self, value: Any) -> Any:
+        """Validate file data."""
+        if value is None:
+            return value
+        
+        if isinstance(value, str):
+            # Check if file exists
+            if not self._file_exists(value):
+                raise ValidationError(f"File does not exist: {value}")
+            
+            # Check file size
+            file_size = self._get_file_size(value)
+            if file_size > self.max_size:
+                raise ValidationError(f"File too large: {file_size} bytes (max: {self.max_size})")
+            
+            # Check extension
+            if self.allowed_extensions:
+                import os
+                ext = os.path.splitext(value)[1].lower()
+                if ext not in self.allowed_extensions:
+                    raise ValidationError(f"File extension not allowed: {ext}")
+        
+        elif isinstance(value, bytes):
+            # Check size
+            if len(value) > self.max_size:
+                raise ValidationError(f"File too large: {len(value)} bytes (max: {self.max_size})")
+        
+        return value
+    
+    def _get_sql_type(self) -> str:
+        """Get SQL type for this field."""
+        return "BLOB"
+    
+    def from_db_value(self, value: Any) -> Any:
+        """Convert database value to Python value."""
+        return value
+
+
+class ImageField(FileField):
+    """
+    Image field for storing and managing image data with Rust backend operations.
+    
+    Supports image processing, resizing, format conversion, and metadata.
+    """
+    
+    def __init__(self, upload_to: str = "images/", max_size: int = 5 * 1024 * 1024,
+                 allowed_formats: List[str] = None, resize_to: Tuple[int, int] = None,
+                 create_thumbnail: bool = False, thumbnail_size: int = 150, **kwargs):
+        super().__init__(upload_to=upload_to, max_size=max_size, **kwargs)
+        self.allowed_formats = allowed_formats or ['.jpg', '.jpeg', '.png', '.gif', '.webp']
+        self.resize_to = resize_to
+        self.create_thumbnail = create_thumbnail
+        self.thumbnail_size = thumbnail_size
+    
+    def to_db_value(self, value, instance):
+        """Convert image path or bytes to database storage format with optional processing."""
+        if value is None:
+            return None
+            
+        # Get raw bytes
+        if isinstance(value, str):
+            data = self._read_file_bytes(value)
+        elif isinstance(value, bytes):
+            data = value
+        else:
+            raise ValueError(f"ImageField expects string path or bytes, got {type(value)}")
+        
+        # Process image if needed
+        data = self._process_image(data)
+        
+        return data
+    
+    def _process_image(self, data: bytes) -> bytes:
+        """Process image using Rust backend."""
+        try:
+            import oxen_engine
+            
+            # Resize if specified
+            if self.resize_to:
+                width, height = self.resize_to
+                data = oxen_engine.resize_image(data, width, height)
+            
+            # Create thumbnail if requested
+            if self.create_thumbnail:
+                thumbnail_data = oxen_engine.create_thumbnail(data, self.thumbnail_size)
+                # Store thumbnail separately (you might want to add a thumbnail field)
+                thumbnail_path = self._save_thumbnail(thumbnail_data)
+            
+            return data
+            
+        except ImportError:
+            # Fallback to Python (basic processing)
+            return data
+    
+    def _save_thumbnail(self, data: bytes) -> str:
+        """Save thumbnail to file."""
+        import os
+        import uuid
+        
+        thumbnail_dir = os.path.join(self.upload_to, "thumbnails")
+        os.makedirs(thumbnail_dir, exist_ok=True)
+        
+        filename = f"thumb_{uuid.uuid4()}.png"
+        file_path = os.path.join(thumbnail_dir, filename)
+        
+        try:
+            import oxen_engine
+            oxen_engine.save_image(file_path, data)
+        except ImportError:
+            with open(file_path, 'wb') as f:
+                f.write(data)
+        
+        return file_path
+    
+    def get_image_info(self, data: bytes) -> Dict[str, Any]:
+        """Get image information using Rust backend."""
+        try:
+            import oxen_engine
+            width, height, format = oxen_engine.get_image_info(data)
+            return {
+                'width': width,
+                'height': height,
+                'format': format,
+                'size': len(data)
+            }
+        except ImportError:
+            # Fallback to Python
+            from PIL import Image
+            import io
+            
+            img = Image.open(io.BytesIO(data))
+            return {
+                'width': img.width,
+                'height': img.height,
+                'format': img.format,
+                'size': len(data)
+            }
+    
+    def resize_image(self, data: bytes, width: int, height: int) -> bytes:
+        """Resize image using Rust backend."""
+        try:
+            import oxen_engine
+            return oxen_engine.resize_image(data, width, height)
+        except ImportError:
+            # Fallback to Python
+            from PIL import Image
+            import io
+            
+            img = Image.open(io.BytesIO(data))
+            resized = img.resize((width, height), Image.Resampling.LANCZOS)
+            
+            buffer = io.BytesIO()
+            resized.save(buffer, format='PNG')
+            return buffer.getvalue()
+    
+    def blur_image(self, data: bytes, sigma: float = 1.0) -> bytes:
+        """Blur image using Rust backend."""
+        try:
+            import oxen_engine
+            return oxen_engine.blur_image(data, sigma)
+        except ImportError:
+            # Fallback to Python
+            from PIL import Image, ImageFilter
+            import io
+            
+            img = Image.open(io.BytesIO(data))
+            blurred = img.filter(ImageFilter.GaussianBlur(radius=sigma))
+            
+            buffer = io.BytesIO()
+            blurred.save(buffer, format='PNG')
+            return buffer.getvalue()
+    
+    def brighten_image(self, data: bytes, value: int = 10) -> bytes:
+        """Brighten image using Rust backend."""
+        try:
+            import oxen_engine
+            return oxen_engine.brighten_image(data, value)
+        except ImportError:
+            # Fallback to Python
+            from PIL import Image, ImageEnhance
+            import io
+            
+            img = Image.open(io.BytesIO(data))
+            enhancer = ImageEnhance.Brightness(img)
+            brightened = enhancer.enhance(1.0 + value / 100.0)
+            
+            buffer = io.BytesIO()
+            brightened.save(buffer, format='PNG')
+            return buffer.getvalue()
+    
+    def convert_format(self, data: bytes, format: str) -> bytes:
+        """Convert image format using Rust backend."""
+        try:
+            import oxen_engine
+            return oxen_engine.convert_image_format(data, format)
+        except ImportError:
+            # Fallback to Python
+            from PIL import Image
+            import io
+            
+            img = Image.open(io.BytesIO(data))
+            buffer = io.BytesIO()
+            img.save(buffer, format=format.upper())
+            return buffer.getvalue()
+    
+    def create_thumbnail(self, data: bytes, max_size: int = 150) -> bytes:
+        """Create thumbnail using Rust backend."""
+        try:
+            import oxen_engine
+            return oxen_engine.create_thumbnail(data, max_size)
+        except ImportError:
+            # Fallback to Python
+            from PIL import Image
+            import io
+            
+            img = Image.open(io.BytesIO(data))
+            img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+            
+            buffer = io.BytesIO()
+            img.save(buffer, format='PNG')
+            return buffer.getvalue() 

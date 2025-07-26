@@ -7,7 +7,12 @@ __author__ = "OxenORM Team"
 
 # Core imports
 from .models import Model, ModelMeta
-from .fields import Field
+from .fields import (
+    Field, CharField, TextField, IntField, IntegerField, FloatField, DecimalField,
+    BooleanField, DateField, DateTimeField, TimeField, UUIDField, JSONField,
+    BinaryField, EmailField, URLField, SlugField, FileField, ImageField,
+    ForeignKeyField, OneToOneField, ManyToManyField
+)
 from .exceptions import (
     ValidationError, ModelError, DoesNotExist, MultipleObjectsReturned,
     IncompleteInstanceError, IntegrityError, OperationalError, ParamsError
@@ -16,6 +21,8 @@ from .queryset import QuerySet, AwaitableQuery, QuerySetSingle
 from .manager import Manager
 from .signals import Signals
 from .validators import Validator
+from .engine import connect, disconnect
+from .file_operations import FileOperations, FileManager, ImageProcessor
 
 # Try to import Rust backend (optional)
 try:
@@ -26,9 +33,14 @@ except ImportError:
     OxenEngine = None
 
 __all__ = [
-    'Model', 'ModelMeta', 'Field', 'ValidationError', 'ModelError', 
-    'DoesNotExist', 'MultipleObjectsReturned', 'IncompleteInstanceError',
-    'IntegrityError', 'OperationalError', 'ParamsError', 'QuerySet',
-    'AwaitableQuery', 'QuerySetSingle', 'Manager', 'Signals', 'Validator',
+    'Model', 'ModelMeta', 
+    'Field', 'CharField', 'TextField', 'IntField', 'IntegerField', 'FloatField', 'DecimalField',
+    'BooleanField', 'DateField', 'DateTimeField', 'TimeField', 'UUIDField', 'JSONField',
+    'BinaryField', 'EmailField', 'URLField', 'SlugField', 'FileField', 'ImageField',
+    'ForeignKeyField', 'OneToOneField', 'ManyToManyField',
+    'ValidationError', 'ModelError', 'DoesNotExist', 'MultipleObjectsReturned',
+    'IncompleteInstanceError', 'IntegrityError', 'OperationalError', 'ParamsError',
+    'QuerySet', 'AwaitableQuery', 'QuerySetSingle', 'Manager', 'Signals', 'Validator',
+    'connect', 'disconnect', 'FileOperations', 'FileManager', 'ImageProcessor',
     'OxenEngine', 'RUST_AVAILABLE'
 ] 
