@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, cast, Union
 
 from oxen.exceptions import FieldError, OperationalError
 from oxen.fields.base import Field
@@ -229,7 +229,7 @@ class F(Expression):
 class Subquery:
     """Subquery expression."""
     
-    def __init__(self, query: AwaitableQuery) -> None:
+    def __init__(self, query: 'AwaitableQuery') -> None:
         self.query = query
 
     def get_sql(self) -> str:
@@ -448,14 +448,14 @@ class Function(Expression):
     __slots__ = ("field", "field_object", "default_values")
 
     def __init__(
-        self, field: str | F | CombinedExpression | Function, *default_values: Any
+        self, field: Union[str, F, CombinedExpression, 'Function'], *default_values: Any
     ) -> None:
         """Initialize function."""
         self.field = field
         self.field_object = None
         self.default_values = default_values
 
-    def _get_function_field(self, field: str | F | CombinedExpression | Function, *default_values) -> str:
+    def _get_function_field(self, field: Union[str, F, CombinedExpression, 'Function'], *default_values) -> str:
         """Get function field SQL."""
         if isinstance(field, str):
             return field
@@ -463,7 +463,7 @@ class Function(Expression):
             return field.name
         elif isinstance(field, CombinedExpression):
             return field.resolve(ResolveContext(None, "", {}, {})).term
-        elif isinstance(field, Function):
+        elif isinstance(field, 'Function'):
             return field.resolve(ResolveContext(None, "", {}, {})).term
         else:
             return str(field)
@@ -538,7 +538,7 @@ class When(Expression):
     def __init__(
         self,
         *args: Q,
-        then: str | F | CombinedExpression | Function,
+        then: Union[str, F, CombinedExpression, 'Function'],
         negate: bool = False,
         **kwargs: Any,
     ) -> None:
@@ -582,7 +582,7 @@ class Case(Expression):
     def __init__(
         self,
         *args: When,
-        default: str | F | CombinedExpression | Function | None = None,
+        default: Union[str, F, CombinedExpression, 'Function', None] = None,
     ) -> None:
         """Initialize case expression."""
         self.whens = list(args)

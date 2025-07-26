@@ -44,6 +44,13 @@ class Field(ABC):
         # Internal attributes
         self.name: Optional[str] = None
         self.model: Optional[Type] = None
+        self.model_field_name: Optional[str] = None
+        
+        # Default attributes for compatibility
+        self.generated = False
+        self.has_db_field = True
+        self.source_field = None
+        self.skip_to_python_if_native = False
         
         # Store additional kwargs
         for key, value in kwargs.items():
@@ -97,6 +104,10 @@ class Field(ABC):
     def get_db_column(self) -> str:
         """Get the database column name for this field"""
         return self.db_column or self.name
+    
+    def to_python_value(self, value: Any) -> Any:
+        """Convert database value to Python value"""
+        return self.from_db_value(value)
     
     def get_sql_type(self) -> str:
         """Get the SQL type for this field"""

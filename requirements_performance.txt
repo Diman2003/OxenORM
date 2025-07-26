@@ -1,9 +1,0 @@
-# Performance Testing and Monitoring Dependencies
-psutil>=5.9.0
-fastapi>=0.104.0
-uvicorn>=0.24.0
-pydantic>=2.0.0
-sqlalchemy>=2.0.0
-tortoise-orm>=0.20.0
-asyncpg>=0.29.0
-aiosqlite>=0.19.0 

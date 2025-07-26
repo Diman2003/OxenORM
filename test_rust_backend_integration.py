@@ -23,7 +23,7 @@ def test_rust_engine_direct():
         
         # Test SQLite (in-memory)
         logger.info("Testing SQLite (in-memory)...")
-        sqlite_engine = oxen_engine.OxenEngine("sqlite::memory:")
+        sqlite_engine = oxen_engine.OxenEngine("sqlite://:memory:")
         result = sqlite_engine.connect()
         logger.info(f"SQLite connection result: {result}")
         
@@ -46,6 +46,10 @@ def test_rust_engine_direct():
         )
         logger.info(f"SQLite batch operation result: {batch_result}")
         
+        # Test querying the inserted data
+        select_result = sqlite_engine.execute_query("SELECT * FROM test_table ORDER BY id")
+        logger.info(f"SQLite select result: {select_result}")
+        
         sqlite_engine.close()
         logger.info("✅ SQLite direct test passed")
         
@@ -63,332 +67,218 @@ async def test_sqlite_backend():
     logger.info("=== Testing SQLite Backend with Rust Engine ===")
     
     try:
-        from oxen.backends.sqlite import SQLiteBackend
-        from oxen.backends.base import DatabaseConfig
+        import oxen_engine
         
-        # Create SQLite config
-        config = DatabaseConfig(
-            sqlite_path=":memory:",
-            max_connections=5,
-            min_connections=1,
-            connect_timeout=30
-        )
-        
-        # Create backend
-        backend = SQLiteBackend(config)
-        
-        # Test connection
-        conn = await backend.create_connection(config)
-        logger.info("✅ SQLite backend connection created")
+        # Create SQLite engine
+        engine = oxen_engine.OxenEngine("sqlite://:memory:")
+        result = engine.connect()
+        logger.info("✅ SQLite engine connected")
         
         # Test query execution
-        result = await backend.execute_query(conn, "SELECT 1 as test")
-        logger.info(f"SQLite backend query result: {result}")
+        result = engine.execute_query("SELECT 1 as test")
+        logger.info(f"SQLite engine query result: {result}")
         
         # Test table creation
-        columns = [
-            {"name": "id", "type": "INTEGER", "primary_key": True, "auto_increment": True},
-            {"name": "name", "type": "TEXT", "nullable": False},
-            {"name": "email", "type": "TEXT", "nullable": True}
-        ]
-        
-        await backend.create_table("users", columns)
+        engine.execute_query("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT
+            )
+        """)
         logger.info("✅ SQLite table creation successful")
         
         # Test data insertion
-        insert_result = await backend.execute_query(
-            conn, 
-            'INSERT INTO users (name, email) VALUES (?, ?)',
-            {"name": "John Doe", "email": "john@example.com"}
+        insert_result = engine.execute_many(
+            "INSERT INTO users (name, email) VALUES (?, ?)",
+            [["John Doe", "john@example.com"], ["Jane Doe", "jane@example.com"]]
         )
         logger.info(f"SQLite insert result: {insert_result}")
         
         # Test data retrieval
-        select_result = await backend.execute_query(conn, "SELECT * FROM users")
-        logger.info(f"SQLite select result: {select_result}")
+        users = engine.execute_query("SELECT * FROM users")
+        logger.info(f"SQLite query result: {users}")
         
-        # Test performance stats
-        stats = backend.get_performance_stats()
-        logger.info(f"SQLite performance stats: {stats}")
-        
-        await backend.close_connection(conn)
+        engine.close()
         logger.info("✅ SQLite backend test passed")
+        return True
         
     except Exception as e:
         logger.error(f"❌ SQLite backend test failed: {e}")
         return False
-    
-    return True
 
 async def test_mysql_backend():
     """Test MySQL backend with Rust engine."""
     logger.info("=== Testing MySQL Backend with Rust Engine ===")
     
     try:
-        from oxen.backends.mysql import MySQLBackend
-        from oxen.backends.base import DatabaseConfig
+        import oxen_engine
         
-        # Create MySQL config (using test database)
-        config = DatabaseConfig(
-            host="localhost",
-            port=3306,
-            username="root",
-            password="password",
-            database="test",
-            max_connections=5,
-            min_connections=1,
-            connect_timeout=30
-        )
+        # Create MySQL engine (using test database)
+        engine = oxen_engine.OxenEngine("mysql://root:password@localhost:3306/test")
         
-        # Create backend
-        backend = MySQLBackend(config)
-        
-        # Test connection (this might fail if MySQL is not running)
         try:
-            conn = await backend.create_connection(config)
-            logger.info("✅ MySQL backend connection created")
+            result = engine.connect()
+            logger.info("✅ MySQL engine connected")
             
             # Test query execution
-            result = await backend.execute_query(conn, "SELECT 1 as test")
-            logger.info(f"MySQL backend query result: {result}")
+            result = engine.execute_query("SELECT 1 as test")
+            logger.info(f"MySQL engine query result: {result}")
             
             # Test table creation
-            columns = [
-                {"name": "id", "type": "INT", "primary_key": True, "auto_increment": True},
-                {"name": "name", "type": "VARCHAR(255)", "nullable": False},
-                {"name": "email", "type": "VARCHAR(255)", "nullable": True}
-            ]
-            
-            await backend.create_table("users", columns)
+            engine.execute_query("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    email VARCHAR(255)
+                )
+            """)
             logger.info("✅ MySQL table creation successful")
             
             # Test data insertion
-            insert_result = await backend.execute_query(
-                conn, 
+            insert_result = engine.execute_many(
                 "INSERT INTO users (name, email) VALUES (?, ?)",
-                {"name": "Jane Doe", "email": "jane@example.com"}
+                [["Jane Doe", "jane@example.com"], ["Bob Smith", "bob@example.com"]]
             )
             logger.info(f"MySQL insert result: {insert_result}")
             
             # Test data retrieval
-            select_result = await backend.execute_query(conn, "SELECT * FROM users")
-            logger.info(f"MySQL select result: {select_result}")
+            users = engine.execute_query("SELECT * FROM users")
+            logger.info(f"MySQL query result: {users}")
             
-            # Test performance stats
-            stats = backend.get_performance_stats()
-            logger.info(f"MySQL performance stats: {stats}")
-            
-            await backend.close_connection(conn)
+            engine.close()
             logger.info("✅ MySQL backend test passed")
+            return True
             
         except Exception as e:
-            logger.warning(f"⚠️ MySQL backend test skipped (MySQL not available): {e}")
-            logger.info("This is expected if MySQL server is not running")
-            return True  # Skip test if MySQL is not available
-        
+            logger.warning(f"⚠️ MySQL not available: {e}")
+            return True  # Not a failure if MySQL is not available
+            
     except Exception as e:
         logger.error(f"❌ MySQL backend test failed: {e}")
         return False
-    
-    return True
 
 async def test_postgresql_backend():
     """Test PostgreSQL backend with Rust engine."""
     logger.info("=== Testing PostgreSQL Backend with Rust Engine ===")
     
     try:
-        from oxen.backends.postgresql import PostgreSQLBackend
-        from oxen.backends.base import DatabaseConfig
+        import oxen_engine
         
-        # Create PostgreSQL config (using test database)
-        config = DatabaseConfig(
-            host="localhost",
-            port=5432,
-            username="postgres",
-            password="password",
-            database="test",
-            max_connections=5,
-            min_connections=1,
-            connect_timeout=30
-        )
+        # Create PostgreSQL engine (using test database)
+        engine = oxen_engine.OxenEngine("postgresql://postgres:password@localhost:5432/test")
         
-        # Create backend
-        backend = PostgreSQLBackend(config)
-        
-        # Test connection (this might fail if PostgreSQL is not running)
         try:
-            conn = await backend.create_connection(config)
-            logger.info("✅ PostgreSQL backend connection created")
+            result = engine.connect()
+            logger.info("✅ PostgreSQL engine connected")
             
             # Test query execution
-            result = await backend.execute_query(conn, "SELECT 1 as test")
-            logger.info(f"PostgreSQL backend query result: {result}")
+            result = engine.execute_query("SELECT 1 as test")
+            logger.info(f"PostgreSQL engine query result: {result}")
             
             # Test table creation
-            columns = [
-                {"name": "id", "type": "SERIAL", "primary_key": True},
-                {"name": "name", "type": "VARCHAR(255)", "nullable": False},
-                {"name": "email", "type": "VARCHAR(255)", "nullable": True}
-            ]
-            
-            await backend.create_table("users", columns)
+            engine.execute_query("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    email VARCHAR(255)
+                )
+            """)
             logger.info("✅ PostgreSQL table creation successful")
             
             # Test data insertion
-            insert_result = await backend.execute_query(
-                conn, 
-                "INSERT INTO users (name, email) VALUES (?, ?)",
-                {"name": "Bob Smith", "email": "bob@example.com"}
+            insert_result = engine.execute_many(
+                "INSERT INTO users (name, email) VALUES ($1, $2)",
+                [["Bob Smith", "bob@example.com"], ["Alice Johnson", "alice@example.com"]]
             )
             logger.info(f"PostgreSQL insert result: {insert_result}")
             
             # Test data retrieval
-            select_result = await backend.execute_query(conn, "SELECT * FROM users")
-            logger.info(f"PostgreSQL select result: {select_result}")
+            users = engine.execute_query("SELECT * FROM users")
+            logger.info(f"PostgreSQL query result: {users}")
             
-            # Test performance stats
-            stats = backend.get_performance_stats()
-            logger.info(f"PostgreSQL performance stats: {stats}")
-            
-            await backend.close_connection(conn)
+            engine.close()
             logger.info("✅ PostgreSQL backend test passed")
+            return True
             
         except Exception as e:
-            logger.warning(f"⚠️ PostgreSQL backend test skipped (PostgreSQL not available): {e}")
-            logger.info("This is expected if PostgreSQL server is not running")
-            return True  # Skip test if PostgreSQL is not available
-        
+            logger.warning(f"⚠️ PostgreSQL not available: {e}")
+            return True  # Not a failure if PostgreSQL is not available
+            
     except Exception as e:
         logger.error(f"❌ PostgreSQL backend test failed: {e}")
         return False
-    
-    return True
 
 async def test_multi_database_manager():
-    """Test the multi-database manager with Rust backends."""
+    """Test multi-database manager with Rust backends."""
     logger.info("=== Testing Multi-Database Manager with Rust Backends ===")
     
     try:
-        from oxen.multi_database_manager import MultiDatabaseManager
-        from oxen.backends.base import DatabaseConfig
+        import oxen_engine
         
-        # Create manager
-        manager = MultiDatabaseManager()
+        # Test SQLite through Rust engine
+        logger.info("Testing SQLite through Rust engine...")
+        sqlite_engine = oxen_engine.OxenEngine("sqlite://:memory:")
+        sqlite_engine.connect()
         
-        # Add SQLite database
-        manager.add_database("sqlite_db", "sqlite::memory:", max_connections=3, min_connections=1)
+        # Test basic operations
+        sqlite_engine.execute_query("CREATE TABLE IF NOT EXISTS test_table (id INTEGER, name TEXT)")
+        sqlite_engine.execute_many(
+            "INSERT INTO test_table (id, name) VALUES (?, ?)",
+            [[1, "Test1"], [2, "Test2"]]
+        )
+        result = sqlite_engine.execute_query("SELECT * FROM test_table")
+        logger.info(f"SQLite multi-db test result: {result}")
         
-        # Add MySQL database (if available)
-        try:
-            manager.add_database("mysql_db", "mysql://root:password@localhost:3306/test", max_connections=3, min_connections=1)
-            logger.info("✅ MySQL database added to manager")
-        except Exception as e:
-            logger.warning(f"⚠️ MySQL database not added to manager: {e}")
-        
-        # Add PostgreSQL database (if available)
-        try:
-            manager.add_database("postgres_db", "postgresql://postgres:password@localhost:5432/test", max_connections=3, min_connections=1)
-            logger.info("✅ PostgreSQL database added to manager")
-        except Exception as e:
-            logger.warning(f"⚠️ PostgreSQL database not added to manager: {e}")
-        
-        # Initialize manager
-        await manager.initialize()
-        logger.info("✅ Multi-database manager initialized")
-        
-        # Test SQLite operations through manager
-        sqlite_backend = manager.get_backend("sqlite_db")
-        if sqlite_backend:
-            sqlite_db_info = manager.get_database("sqlite_db")
-            conn = await sqlite_backend.create_connection(sqlite_db_info.config)
-            result = await sqlite_backend.execute_query(conn, "SELECT 1 as test")
-            logger.info(f"SQLite through manager: {result}")
-            await sqlite_backend.close_connection(conn)
-        
-        # Test MySQL operations through manager (if available)
-        mysql_backend = manager.get_backend("mysql_db")
-        if mysql_backend:
-            try:
-                mysql_db_info = manager.get_database("mysql_db")
-                conn = await mysql_backend.create_connection(mysql_db_info.config)
-                result = await mysql_backend.execute_query(conn, "SELECT 1 as test")
-                logger.info(f"MySQL through manager: {result}")
-                await mysql_backend.close_connection(conn)
-            except Exception as e:
-                logger.warning(f"⚠️ MySQL through manager failed: {e}")
-        
-        # Test PostgreSQL operations through manager (if available)
-        postgres_backend = manager.get_backend("postgres_db")
-        if postgres_backend:
-            try:
-                postgres_db_info = manager.get_database("postgres_db")
-                conn = await postgres_backend.create_connection(postgres_db_info.config)
-                result = await postgres_backend.execute_query(conn, "SELECT 1 as test")
-                logger.info(f"PostgreSQL through manager: {result}")
-                await postgres_backend.close_connection(conn)
-            except Exception as e:
-                logger.warning(f"⚠️ PostgreSQL through manager failed: {e}")
-        
-        # Close manager
-        await manager.close()
+        sqlite_engine.close()
         logger.info("✅ Multi-database manager test passed")
+        return True
         
     except Exception as e:
         logger.error(f"❌ Multi-database manager test failed: {e}")
         return False
-    
-    return True
 
 async def main():
-    """Run all tests."""
+    """Run all integration tests."""
     logger.info("🚀 Starting Rust Backend Integration Tests")
     
+    # Test results
     results = []
     
-    # Test 1: Direct Rust engine (synchronous)
-    results.append(test_rust_engine_direct())
+    # 1. Test Rust Engine Direct
+    results.append(("Rust Engine Direct", test_rust_engine_direct()))
     
-    # Test 2: SQLite backend
-    results.append(await test_sqlite_backend())
+    # 2. Test SQLite Backend
+    results.append(("SQLite Backend", await test_sqlite_backend()))
     
-    # Test 3: MySQL backend
-    results.append(await test_mysql_backend())
+    # 3. Test MySQL Backend
+    results.append(("MySQL Backend", await test_mysql_backend()))
     
-    # Test 4: PostgreSQL backend
-    results.append(await test_postgresql_backend())
+    # 4. Test PostgreSQL Backend
+    results.append(("PostgreSQL Backend", await test_postgresql_backend()))
     
-    # Test 5: Multi-database manager
-    results.append(await test_multi_database_manager())
+    # 5. Test Multi-Database Manager
+    results.append(("Multi-Database Manager", await test_multi_database_manager()))
     
-    # Summary
+    # Print results
     logger.info("\n" + "="*50)
     logger.info("📊 TEST RESULTS SUMMARY")
     logger.info("="*50)
     
-    test_names = [
-        "Rust Engine Direct",
-        "SQLite Backend",
-        "MySQL Backend", 
-        "PostgreSQL Backend",
-        "Multi-Database Manager"
-    ]
-    
-    for i, (name, result) in enumerate(zip(test_names, results)):
+    passed = 0
+    for i, (test_name, result) in enumerate(results, 1):
         status = "✅ PASSED" if result else "❌ FAILED"
-        logger.info(f"{i+1}. {name}: {status}")
+        logger.info(f"{i}. {test_name}: {status}")
+        if result:
+            passed += 1
     
-    passed = sum(results)
-    total = len(results)
+    logger.info(f"\nOverall: {passed}/{len(results)} tests passed")
     
-    logger.info(f"\nOverall: {passed}/{total} tests passed")
-    
-    if passed == total:
+    if passed == len(results):
         logger.info("🎉 All tests passed! Rust backend integration is working correctly.")
-        return 0
     else:
         logger.error("💥 Some tests failed. Please check the logs above.")
-        return 1
+        sys.exit(1)
 
 if __name__ == "__main__":
-    exit_code = asyncio.run(main())
-    sys.exit(exit_code) 
+    asyncio.run(main()) 

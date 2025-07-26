@@ -92,7 +92,7 @@ class MetaInfo:
             self.pk_attr = name
             self.pk_field = field_obj
         
-        if field_obj.generated:
+        if hasattr(field_obj, 'generated') and field_obj.generated:
             self.generated_db_fields.add(name)
         
         if field_obj.has_db_field:
@@ -124,7 +124,7 @@ class MetaInfo:
 class ModelMeta(type):
     """Metaclass for Model classes."""
     
-    def __new__(cls, name: str, bases: tuple, attrs: dict) -> ModelMeta:
+    def __new__(cls, name: str, bases: tuple, attrs: dict) -> "ModelMeta":
         """Create a new model class."""
         # Check if this is an abstract model
         meta_class = attrs.get('Meta', None)

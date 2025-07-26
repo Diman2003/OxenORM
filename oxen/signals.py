@@ -7,9 +7,10 @@ which allows for hooks into model lifecycle events.
 """
 
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Type, TYPE_CHECKING
 
-from oxen.models import Model
+if TYPE_CHECKING:
+    from oxen.models import Model
 
 
 class Signals(Enum):
@@ -29,11 +30,11 @@ class SignalManager:
 
     def __init__(self):
         """Initialize the signal manager."""
-        self._receivers: Dict[Signals, Dict[Type[Model], List[Callable]]] = {
+        self._receivers: Dict[Signals, Dict[Type["Model"], List[Callable]]] = {
             signal: {} for signal in Signals
         }
 
-    def connect(self, signal: Signals, sender: Type[Model], receiver: Callable) -> None:
+    def connect(self, signal: Signals, sender: Type["Model"], receiver: Callable) -> None:
         """
         Connect a receiver to a signal.
         
@@ -50,7 +51,7 @@ class SignalManager:
         
         self._receivers[signal][sender].append(receiver)
 
-    def disconnect(self, signal: Signals, sender: Type[Model], receiver: Callable) -> None:
+    def disconnect(self, signal: Signals, sender: Type["Model"], receiver: Callable) -> None:
         """
         Disconnect a receiver from a signal.
         
@@ -63,7 +64,7 @@ class SignalManager:
             if receiver in self._receivers[signal][sender]:
                 self._receivers[signal][sender].remove(receiver)
 
-    async def send(self, signal: Signals, sender: Type[Model], **kwargs: Any) -> List[tuple[Callable, Any]]:
+    async def send(self, signal: Signals, sender: Type["Model"], **kwargs: Any) -> List[tuple[Callable, Any]]:
         """
         Send a signal to all connected receivers.
         
@@ -92,7 +93,7 @@ class SignalManager:
         
         return responses
 
-    def get_receivers(self, signal: Signals, sender: Type[Model]) -> List[Callable]:
+    def get_receivers(self, signal: Signals, sender: Type["Model"]) -> List[Callable]:
         """
         Get all receivers for a signal and sender.
         
@@ -107,7 +108,7 @@ class SignalManager:
             return self._receivers[signal][sender].copy()
         return []
 
-    def clear(self, signal: Optional[Signals] = None, sender: Optional[Type[Model]] = None) -> None:
+    def clear(self, signal: Optional[Signals] = None, sender: Optional[Type["Model"]] = None) -> None:
         """
         Clear signal receivers.
         
@@ -132,7 +133,7 @@ class SignalManager:
 signal_manager = SignalManager()
 
 
-def connect(signal: Signals, sender: Type[Model], receiver: Callable) -> None:
+def connect(signal: Signals, sender: Type["Model"], receiver: Callable) -> None:
     """
     Connect a receiver to a signal.
     
@@ -144,7 +145,7 @@ def connect(signal: Signals, sender: Type[Model], receiver: Callable) -> None:
     signal_manager.connect(signal, sender, receiver)
 
 
-def disconnect(signal: Signals, sender: Type[Model], receiver: Callable) -> None:
+def disconnect(signal: Signals, sender: Type["Model"], receiver: Callable) -> None:
     """
     Disconnect a receiver from a signal.
     
@@ -156,7 +157,7 @@ def disconnect(signal: Signals, sender: Type[Model], receiver: Callable) -> None
     signal_manager.disconnect(signal, sender, receiver)
 
 
-async def send(signal: Signals, sender: Type[Model], **kwargs: Any) -> List[tuple[Callable, Any]]:
+async def send(signal: Signals, sender: Type["Model"], **kwargs: Any) -> List[tuple[Callable, Any]]:
     """
     Send a signal to all connected receivers.
     
@@ -171,7 +172,7 @@ async def send(signal: Signals, sender: Type[Model], **kwargs: Any) -> List[tupl
     return await signal_manager.send(signal, sender, **kwargs)
 
 
-def receiver(signal: Signals, sender: Type[Model]):
+def receiver(signal: Signals, sender: Type["Model"]):
     """
     Decorator to register a function as a signal receiver.
     
@@ -189,22 +190,22 @@ def receiver(signal: Signals, sender: Type[Model]):
 
 
 # Convenience decorators for common signals
-def pre_save(sender: Type[Model]):
+def pre_save(sender: Type["Model"]):
     """Decorator for pre_save signal."""
     return receiver(Signals.pre_save, sender)
 
 
-def post_save(sender: Type[Model]):
+def post_save(sender: Type["Model"]):
     """Decorator for post_save signal."""
     return receiver(Signals.post_save, sender)
 
 
-def pre_delete(sender: Type[Model]):
+def pre_delete(sender: Type["Model"]):
     """Decorator for pre_delete signal."""
     return receiver(Signals.pre_delete, sender)
 
 
-def post_delete(sender: Type[Model]):
+def post_delete(sender: Type["Model"]):
     """Decorator for post_delete signal."""
     return receiver(Signals.post_delete, sender)
 
