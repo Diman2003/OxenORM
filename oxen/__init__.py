@@ -11,7 +11,8 @@ from .fields import (
     Field, CharField, TextField, IntField, IntegerField, FloatField, DecimalField,
     BooleanField, DateField, DateTimeField, TimeField, UUIDField, JSONField,
     BinaryField, EmailField, URLField, SlugField, FileField, ImageField,
-    ForeignKeyField, OneToOneField, ManyToManyField
+    ForeignKeyField, OneToOneField, ManyToManyField,
+    ArrayField, RangeField, HStoreField, JSONBField, GeometryField
 )
 from .exceptions import (
     ValidationError, ModelError, DoesNotExist, MultipleObjectsReturned,
@@ -38,6 +39,7 @@ __all__ = [
     'BooleanField', 'DateField', 'DateTimeField', 'TimeField', 'UUIDField', 'JSONField',
     'BinaryField', 'EmailField', 'URLField', 'SlugField', 'FileField', 'ImageField',
     'ForeignKeyField', 'OneToOneField', 'ManyToManyField',
+    'ArrayField', 'RangeField', 'HStoreField', 'JSONBField', 'GeometryField',
     'ValidationError', 'ModelError', 'DoesNotExist', 'MultipleObjectsReturned',
     'IncompleteInstanceError', 'IntegrityError', 'OperationalError', 'ParamsError',
     'QuerySet', 'AwaitableQuery', 'QuerySetSingle', 'Manager', 'Signals', 'Validator',

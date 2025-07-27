@@ -115,6 +115,8 @@ class QueryCache:
         return {
             'size': len(self.cache),
             'max_size': self.max_size,
+            'hits': 0,  # Would track this in real implementation
+            'misses': 0,  # Would track this in real implementation
             'hit_rate': 0.0,  # Would track this in real implementation
             'default_ttl': self.default_ttl.total_seconds()
         }
@@ -184,21 +186,28 @@ class PerformanceMonitor:
         if not self.queries:
             return {
                 'total_queries': 0,
-                'avg_execution_time': 0.0,
+                'average_time': 0.0,
+                'min_time': 0.0,
+                'max_time': 0.0,
                 'slow_queries': 0,
-                'success_rate': 0.0
+                'success_rate': 0.0,
+                'cache_hit_rate': 0.0
             }
         
         total_queries = len(self.queries)
         successful_queries = len([q for q in self.queries if q.success])
-        avg_execution_time = sum(q.execution_time for q in self.queries) / total_queries
+        execution_times = [q.execution_time for q in self.queries]
+        avg_execution_time = sum(execution_times) / total_queries
         slow_queries = len(self.get_slow_queries())
         
         return {
             'total_queries': total_queries,
-            'avg_execution_time': avg_execution_time,
+            'average_time': avg_execution_time,
+            'min_time': min(execution_times) if execution_times else 0.0,
+            'max_time': max(execution_times) if execution_times else 0.0,
             'slow_queries': slow_queries,
-            'success_rate': successful_queries / total_queries * 100
+            'success_rate': successful_queries / total_queries * 100,
+            'cache_hit_rate': 0.0  # Placeholder for cache hit rate
         }
     
     def clear(self) -> None:

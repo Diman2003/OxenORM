@@ -435,7 +435,7 @@ class FileField(Field):
         else:
             raise ValueError(f"FileField expects string path or bytes, got {type(value)}")
     
-    def to_python_value(self, value, instance):
+    def to_python_value(self, value):
         """Convert database value back to file path."""
         if value is None:
             return None
