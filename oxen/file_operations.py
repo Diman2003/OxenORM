@@ -40,7 +40,9 @@ class FileManager:
     def write_file(self, path: str, data: bytes) -> None:
         """Write data to file."""
         # Ensure directory exists
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        dirname = os.path.dirname(path)
+        if dirname:  # Only create directory if there is a directory path
+            os.makedirs(dirname, exist_ok=True)
         
         if RUST_AVAILABLE:
             oxen_engine.write_file(path, data)

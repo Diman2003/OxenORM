@@ -275,29 +275,31 @@ class TimeField(Field):
 class UUIDField(Field):
     """UUID field"""
     
+    def __init__(self, auto_generate: bool = False, **kwargs):
+        super().__init__(**kwargs)
+        self.auto_generate = auto_generate
+    
     def _validate(self, value: Any) -> Any:
+        if value is None:
+            if self.auto_generate:
+                import uuid
+                return str(uuid.uuid4())
+            return None
+        
         if isinstance(value, str):
             try:
-                return uuid.UUID(value)
+                import uuid
+                uuid.UUID(value)
+                return value
             except ValueError:
-                raise ValidationError(f"UUIDField cannot parse string: {value}")
-        elif isinstance(value, uuid.UUID):
-            return value
+                raise ValidationError(f"Invalid UUID format: {value}")
         else:
-            raise ValidationError(f"UUIDField must be a UUID, got {type(value)}")
-    
-    def to_db_value(self, value: Any) -> Any:
-        return str(value) if value is not None else None
+            raise ValidationError(f"UUIDField expects string, got {type(value)}")
     
     def from_db_value(self, value: Any) -> Any:
         if value is None:
             return None
-        if isinstance(value, str):
-            return uuid.UUID(value)
-        return value
-    
-    def _get_sql_type(self) -> str:
-        return "TEXT"
+        return str(value)
 
 class JSONField(Field):
     """JSON field"""
@@ -748,3 +750,238 @@ class ImageField(FileField):
             buffer = io.BytesIO()
             img.save(buffer, format='PNG')
             return buffer.getvalue() 
+
+class ArrayField(Field):
+    """PostgreSQL Array field type"""
+    
+    def __init__(self, element_type: str = "text", dimensions: int = 1, **kwargs):
+        super().__init__(**kwargs)
+        self.element_type = element_type
+        self.dimensions = dimensions
+    
+    def _get_sql_type(self) -> str:
+        if self.dimensions == 1:
+            return f"{self.element_type}[]"
+        else:
+            return f"{self.element_type}[{','.join([''] * self.dimensions)}]"
+    
+    def _validate(self, value: Any) -> Any:
+        if value is None:
+            return value
+        
+        if not isinstance(value, (list, tuple)):
+            raise ValidationError(f"ArrayField expects list or tuple, got {type(value)}")
+        
+        # Validate array dimensions
+        if self.dimensions > 1:
+            self._validate_dimensions(value, self.dimensions)
+        
+        return list(value)
+    
+    def _validate_dimensions(self, value: Any, expected_dimensions: int, current_dimension: int = 1):
+        """Recursively validate array dimensions"""
+        if current_dimension > expected_dimensions:
+            raise ValidationError(f"Array has too many dimensions: {current_dimension}")
+        
+        if not isinstance(value, (list, tuple)):
+            if current_dimension < expected_dimensions:
+                raise ValidationError(f"Expected array at dimension {current_dimension}")
+            return
+        
+        for item in value:
+            self._validate_dimensions(item, expected_dimensions, current_dimension + 1)
+    
+    def to_db_value(self, value: Any) -> Any:
+        if value is None:
+            return None
+        return list(value) if isinstance(value, (list, tuple)) else value
+    
+    def from_db_value(self, value: Any) -> Any:
+        if value is None:
+            return None
+        return list(value) if isinstance(value, (list, tuple)) else value
+
+class RangeField(Field):
+    """PostgreSQL Range field type"""
+    
+    def __init__(self, range_type: str = "int4range", **kwargs):
+        super().__init__(**kwargs)
+        self.range_type = range_type
+    
+    def _get_sql_type(self) -> str:
+        return self.range_type
+    
+    def _validate(self, value: Any) -> Any:
+        if value is None:
+            return value
+        
+        if isinstance(value, (list, tuple)) and len(value) == 2:
+            return f"[{value[0]},{value[1]})"
+        elif isinstance(value, str):
+            return value
+        else:
+            raise ValidationError(f"RangeField expects list/tuple with 2 elements or string, got {type(value)}")
+    
+    def to_db_value(self, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, (list, tuple)) and len(value) == 2:
+            return f"[{value[0]},{value[1]})"
+        return value
+    
+    def from_db_value(self, value: Any) -> Any:
+        if value is None:
+            return None
+        return str(value)
+
+class HStoreField(Field):
+    """PostgreSQL HStore field type for key-value storage"""
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+    
+    def _get_sql_type(self) -> str:
+        return "hstore"
+    
+    def _validate(self, value: Any) -> Any:
+        if value is None:
+            return value
+        
+        if isinstance(value, dict):
+            return value
+        elif isinstance(value, str):
+            # Parse hstore string format: "key1=>value1,key2=>value2"
+            try:
+                result = {}
+                if value.strip():
+                    for pair in value.split(','):
+                        if '=>' in pair:
+                            key, val = pair.split('=>', 1)
+                            result[key.strip()] = val.strip()
+                return result
+            except Exception:
+                raise ValidationError(f"Invalid hstore string format: {value}")
+        else:
+            raise ValidationError(f"HStoreField expects dict or string, got {type(value)}")
+    
+    def to_db_value(self, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            # Convert dict to hstore string format
+            pairs = [f"{k}=>{v}" for k, v in value.items()]
+            return ",".join(pairs)
+        return value
+    
+    def from_db_value(self, value: Any) -> Any:
+        if value is None:
+            return None
+        return dict(value) if hasattr(value, 'items') else value
+
+class JSONBField(Field):
+    """PostgreSQL JSONB field type for efficient JSON storage and querying"""
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+    
+    def _get_sql_type(self) -> str:
+        return "jsonb"
+    
+    def _validate(self, value: Any) -> Any:
+        if value is None:
+            return value
+        
+        if isinstance(value, (dict, list)):
+            return value
+        elif isinstance(value, str):
+            try:
+                import json
+                return json.loads(value)
+            except json.JSONDecodeError:
+                raise ValidationError(f"Invalid JSON string: {value}")
+        else:
+            raise ValidationError(f"JSONBField expects dict, list, or JSON string, got {type(value)}")
+    
+    def to_db_value(self, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, (dict, list)):
+            import json
+            return json.dumps(value)
+        return value
+    
+    def from_db_value(self, value: Any) -> Any:
+        if value is None:
+            return None
+        return value
+
+class GeometryField(Field):
+    """PostGIS Geometry field type for spatial data"""
+    
+    def __init__(self, geometry_type: str = "POINT", srid: int = 4326, **kwargs):
+        super().__init__(**kwargs)
+        self.geometry_type = geometry_type.upper()
+        self.srid = srid
+    
+    def _get_sql_type(self) -> str:
+        return f"geometry({self.geometry_type},{self.srid})"
+    
+    def _validate(self, value: Any) -> Any:
+        if value is None:
+            return value
+        
+        if isinstance(value, str):
+            # WKT (Well-Known Text) format
+            return value
+        elif isinstance(value, (list, tuple)):
+            # Convert coordinates to WKT
+            if self.geometry_type == "POINT":
+                if len(value) >= 2:
+                    return f"POINT({value[0]} {value[1]})"
+                else:
+                    raise ValidationError("Point requires at least 2 coordinates")
+            elif self.geometry_type == "LINESTRING":
+                coords = " ".join([f"{coord[0]} {coord[1]}" for coord in value])
+                return f"LINESTRING({coords})"
+            elif self.geometry_type == "POLYGON":
+                # Handle polygon with exterior ring and optional interior rings
+                if isinstance(value[0], (list, tuple)):
+                    rings = []
+                    for ring in value:
+                        coords = " ".join([f"{coord[0]} {coord[1]}" for coord in ring])
+                        rings.append(f"({coords})")
+                    return f"POLYGON({','.join(rings)})"
+                else:
+                    coords = " ".join([f"{coord[0]} {coord[1]}" for coord in value])
+                    return f"POLYGON(({coords}))"
+            else:
+                raise ValidationError(f"Unsupported geometry type: {self.geometry_type}")
+        else:
+            raise ValidationError(f"GeometryField expects string (WKT) or coordinates list, got {type(value)}")
+    
+    def to_db_value(self, value: Any) -> Any:
+        if value is None:
+            return None
+        return str(value)
+    
+    def from_db_value(self, value: Any) -> Any:
+        if value is None:
+            return None
+        return str(value)
+    
+    @classmethod
+    def point(cls, x: float, y: float, srid: int = 4326) -> str:
+        """Create a POINT geometry"""
+        return f"POINT({x} {y})"
+    
+    @classmethod
+    def linestring(cls, coordinates: List[tuple], srid: int = 4326) -> str:
+        """Create a LINESTRING geometry"""
+        coords = " ".join([f"{x} {y}" for x, y in coordinates])
+        return f"LINESTRING({coords})"
+    
+    @classmethod
+    def polygon(cls, coordinates: List[tuple], srid: int = 4326) -> str:
+        """Create a POLYGON geometry"""
+        coords = " ".join([f"{x} {y}" for x, y in coordinates])
+        return f"POLYGON(({coords}))" 

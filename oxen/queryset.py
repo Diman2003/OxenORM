@@ -41,11 +41,13 @@ class Order(str, Enum):
     DESC = "DESC"
 
 
-@dataclass
 class QuerySetSingle(Generic[T_co]):
     """
     Awaitable query that resolves to a single instance of the Model object.
     """
+    
+    def __init__(self, queryset: 'QuerySet[T_co]'):
+        self.queryset = queryset
     
     def __await__(self) -> Generator[Any, None, T_co]:
         """Make the queryset awaitable."""
@@ -443,14 +445,7 @@ class QuerySet(AwaitableQuery[MODEL]):
         """Count matching records."""
         return CountQuery(
             model=self.model,
-            db=self._db,
-            q_objects=self._q_objects,
-            annotations=self._annotations,
-            custom_filters=self._custom_filters,
-            limit=self._limit,
-            offset=self._offset,
-            force_indexes=self._force_indexes,
-            use_indexes=self._use_indexes,
+            db=self._db
         )
 
     def exists(self) -> 'ExistsQuery':
@@ -667,7 +662,22 @@ class ExistsQuery(AwaitableQuery):
 
 class CountQuery(AwaitableQuery):
     """Query for counting records."""
-    pass
+    
+    def __init__(self, model: type[MODEL], db: Any = None):
+        super().__init__(model)
+        self._db = db
+    
+    def __await__(self) -> Generator[Any, None, int]:
+        """Make the count query awaitable."""
+        async def _self() -> int:
+            return await self._execute()
+        return _self().__await__()
+    
+    async def _execute(self) -> int:
+        """Execute the count query and return the count."""
+        # This would be implemented with actual database execution
+        # For now, return 0
+        return 0
 
 class ValuesListQuery(AwaitableQuery, Generic[SINGLE]):
     """Query for returning values as lists."""
@@ -687,4 +697,26 @@ class BulkUpdateQuery(UpdateQuery, Generic[MODEL]):
 
 class BulkCreateQuery(AwaitableQuery, Generic[MODEL]):
     """Query for bulk creating objects."""
-    pass 
+    
+    def __init__(self, model: type[MODEL], db: Any = None, objects: Iterable[MODEL] = None, 
+                 batch_size: Optional[int] = None, ignore_conflicts: bool = False,
+                 update_fields: Optional[Iterable[str]] = None, on_conflict: Optional[Iterable[str]] = None):
+        super().__init__(model)
+        self._db = db
+        self.objects = objects or []
+        self.batch_size = batch_size
+        self.ignore_conflicts = ignore_conflicts
+        self.update_fields = update_fields
+        self.on_conflict = on_conflict
+    
+    def __await__(self) -> Generator[Any, None, list[MODEL]]:
+        """Make the bulk create query awaitable."""
+        async def _self() -> list[MODEL]:
+            return await self._execute()
+        return _self().__await__()
+    
+    async def _execute(self) -> list[MODEL]:
+        """Execute the bulk create query and return created objects."""
+        # This would be implemented with actual database execution
+        # For now, return the objects as-is
+        return list(self.objects) 

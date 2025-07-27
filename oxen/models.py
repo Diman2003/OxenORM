@@ -572,6 +572,18 @@ class Model(metaclass=ModelMeta):
         return cls._db_queryset(using_db).count(*args, **kwargs)
 
     @classmethod
+    async def bulk_create(
+        cls, objects: List['Model'], using_db: Optional[Any] = None
+    ) -> List['Model']:
+        """Bulk create model instances."""
+        if not objects:
+            return []
+        
+        db = using_db or cls._choose_db(for_write=True)
+        queryset = cls._db_queryset(db)
+        return await queryset.bulk_create(objects)
+
+    @classmethod
     def get_or_none(
         cls, *args: Q, using_db: Optional[Any] = None, **kwargs: Any
     ) -> QuerySetSingle[Optional['Model']]:

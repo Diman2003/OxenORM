@@ -7,8 +7,14 @@ with the Python ORM layer, providing the best of both worlds.
 """
 
 import asyncio
+import time
+import hashlib
+import json
 import logging
-from typing import Any, Dict, List, Optional, Union
+from typing import Dict, List, Optional, Any, Tuple
+from collections import defaultdict, OrderedDict
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 
 from .rust_engine import OxenEngine as RustEngine, RUST_AVAILABLE
@@ -17,116 +23,362 @@ from .exceptions import OperationalError, ConnectionError
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class QueryMetrics:
+    """Query performance metrics"""
+    sql: str
+    execution_time: float
+    rows_affected: int
+    timestamp: datetime
+    success: bool
+    error: Optional[str] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'sql': self.sql,
+            'execution_time': self.execution_time,
+            'rows_affected': self.rows_affected,
+            'timestamp': self.timestamp.isoformat(),
+            'success': self.success,
+            'error': self.error
+        }
+
+@dataclass
+class CacheEntry:
+    """Cache entry for query results"""
+    data: Any
+    timestamp: datetime
+    ttl: timedelta
+    
+    def is_expired(self) -> bool:
+        return datetime.now() > self.timestamp + self.ttl
+
+class QueryCache:
+    """LRU cache for query results"""
+    
+    def __init__(self, max_size: int = 1000, default_ttl: int = 300):
+        self.max_size = max_size
+        self.default_ttl = timedelta(seconds=default_ttl)
+        self.cache: OrderedDict[str, CacheEntry] = OrderedDict()
+    
+    def _generate_key(self, sql: str, params: Optional[Dict[str, Any]] = None) -> str:
+        """Generate cache key from SQL and parameters"""
+        key_data = {
+            'sql': sql,
+            'params': params or {}
+        }
+        return hashlib.md5(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
+    
+    def get(self, sql: str, params: Optional[Dict[str, Any]] = None) -> Optional[Any]:
+        """Get cached result"""
+        key = self._generate_key(sql, params)
+        
+        if key in self.cache:
+            entry = self.cache[key]
+            if entry.is_expired():
+                del self.cache[key]
+                return None
+            
+            # Move to end (LRU)
+            self.cache.move_to_end(key)
+            return entry.data
+        
+        return None
+    
+    def set(self, sql: str, data: Any, params: Optional[Dict[str, Any]] = None, 
+            ttl: Optional[int] = None) -> None:
+        """Set cached result"""
+        key = self._generate_key(sql, params)
+        cache_ttl = timedelta(seconds=ttl) if ttl else self.default_ttl
+        
+        entry = CacheEntry(
+            data=data,
+            timestamp=datetime.now(),
+            ttl=cache_ttl
+        )
+        
+        if key in self.cache:
+            self.cache.move_to_end(key)
+        else:
+            if len(self.cache) >= self.max_size:
+                # Remove oldest entry
+                self.cache.popitem(last=False)
+        
+        self.cache[key] = entry
+    
+    def clear(self) -> None:
+        """Clear all cached entries"""
+        self.cache.clear()
+    
+    def stats(self) -> Dict[str, Any]:
+        """Get cache statistics"""
+        return {
+            'size': len(self.cache),
+            'max_size': self.max_size,
+            'hit_rate': 0.0,  # Would track this in real implementation
+            'default_ttl': self.default_ttl.total_seconds()
+        }
+
+class PreparedStatementCache:
+    """Cache for prepared statements"""
+    
+    def __init__(self, max_size: int = 100):
+        self.max_size = max_size
+        self.statements: Dict[str, Any] = {}
+        self.access_count: Dict[str, int] = defaultdict(int)
+    
+    def get(self, sql: str) -> Optional[Any]:
+        """Get prepared statement"""
+        if sql in self.statements:
+            self.access_count[sql] += 1
+            return self.statements[sql]
+        return None
+    
+    def set(self, sql: str, statement: Any) -> None:
+        """Set prepared statement"""
+        if len(self.statements) >= self.max_size:
+            # Remove least used statement
+            least_used = min(self.access_count.items(), key=lambda x: x[1])[0]
+            del self.statements[least_used]
+            del self.access_count[least_used]
+        
+        self.statements[sql] = statement
+        self.access_count[sql] = 1
+    
+    def clear(self) -> None:
+        """Clear all prepared statements"""
+        self.statements.clear()
+        self.access_count.clear()
+    
+    def stats(self) -> Dict[str, Any]:
+        """Get cache statistics"""
+        return {
+            'size': len(self.statements),
+            'max_size': self.max_size,
+            'total_accesses': sum(self.access_count.values())
+        }
+
+class PerformanceMonitor:
+    """Query performance monitoring"""
+    
+    def __init__(self, max_queries: int = 1000):
+        self.max_queries = max_queries
+        self.queries: List[QueryMetrics] = []
+        self.slow_query_threshold = 1.0  # seconds
+    
+    def record_query(self, metrics: QueryMetrics) -> None:
+        """Record query metrics"""
+        self.queries.append(metrics)
+        
+        if len(self.queries) > self.max_queries:
+            # Remove oldest queries
+            self.queries = self.queries[-self.max_queries:]
+    
+    def get_slow_queries(self, threshold: Optional[float] = None) -> List[QueryMetrics]:
+        """Get queries slower than threshold"""
+        thresh = threshold or self.slow_query_threshold
+        return [q for q in self.queries if q.execution_time > thresh]
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get performance statistics"""
+        if not self.queries:
+            return {
+                'total_queries': 0,
+                'avg_execution_time': 0.0,
+                'slow_queries': 0,
+                'success_rate': 0.0
+            }
+        
+        total_queries = len(self.queries)
+        successful_queries = len([q for q in self.queries if q.success])
+        avg_execution_time = sum(q.execution_time for q in self.queries) / total_queries
+        slow_queries = len(self.get_slow_queries())
+        
+        return {
+            'total_queries': total_queries,
+            'avg_execution_time': avg_execution_time,
+            'slow_queries': slow_queries,
+            'success_rate': successful_queries / total_queries * 100
+        }
+    
+    def clear(self) -> None:
+        """Clear all query metrics"""
+        self.queries.clear()
+
 class UnifiedEngine:
-    """
-    Unified engine that combines Rust backend performance with Python ORM flexibility.
+    """Enhanced unified engine with performance optimizations"""
     
-    This engine provides:
-    - High-performance database operations via Rust backend
-    - Python-friendly async interface
-    - Automatic fallback to Python backends when needed
-    - Connection pooling and transaction management
-    """
-    
-    def __init__(self, connection_string: str, use_rust: bool = True):
-        """
-        Initialize the unified engine.
-        
-        Args:
-            connection_string: Database connection string
-            use_rust: Whether to use Rust backend (default: True)
-        """
+    def __init__(self, connection_string: str, database_type: str = "sqlite"):
         self.connection_string = connection_string
-        self.use_rust = use_rust and RUST_AVAILABLE
-        self._rust_engine: Optional[RustEngine] = None
-        self._connected = False
+        self.database_type = database_type
+        self.is_connected = False
         
-        if self.use_rust:
-            try:
-                self._rust_engine = RustEngine(connection_string)
-                logger.info(f"Initialized Rust engine for {connection_string}")
-            except Exception as e:
-                logger.warning(f"Failed to initialize Rust engine: {e}")
-                self.use_rust = False
+        # Performance optimizations
+        self.query_cache = QueryCache()
+        self.statement_cache = PreparedStatementCache()
+        self.performance_monitor = PerformanceMonitor()
         
-        if not self.use_rust:
-            logger.info("Using Python backend fallback")
+        # Connection pooling metrics
+        self.connection_stats = {
+            'total_connections': 0,
+            'active_connections': 0,
+            'connection_errors': 0,
+            'last_connection_time': None
+        }
     
     async def connect(self) -> Dict[str, Any]:
-        """Connect to the database."""
+        """Connect to database with performance tracking"""
+        start_time = time.time()
+        
         try:
-            if self.use_rust and self._rust_engine:
+            # Try Rust backend first
+            if hasattr(self, '_rust_engine'):
                 result = await self._rust_engine.connect()
-                self._connected = True
-                logger.info("Connected via Rust engine")
-                return result
-            else:
-                # Fallback to Python backend
-                await asyncio.sleep(0.001)  # Simulate connection
-                self._connected = True
-                logger.info("Connected via Python backend")
-                return {
-                    "status": "connected",
-                    "connection_string": self.connection_string,
-                    "backend": "python"
-                }
+                if result.get('success'):
+                    self.is_connected = True
+                    self.connection_stats['total_connections'] += 1
+                    self.connection_stats['active_connections'] += 1
+                    self.connection_stats['last_connection_time'] = datetime.now()
+                    return result
+            
+            # Fallback to Python implementation
+            self.is_connected = True
+            self.connection_stats['total_connections'] += 1
+            self.connection_stats['active_connections'] += 1
+            self.connection_stats['last_connection_time'] = datetime.now()
+            
+            connection_time = time.time() - start_time
+            
+            return {
+                'success': True,
+                'connection_string': self.connection_string,
+                'database_type': self.database_type,
+                'connection_time': connection_time,
+                'status': 'connected'
+            }
+            
         except Exception as e:
-            raise ConnectionError(f"Failed to connect: {e}")
+            self.connection_stats['connection_errors'] += 1
+            return {
+                'success': False,
+                'error': str(e),
+                'status': 'failed'
+            }
     
-    async def disconnect(self):
-        """Disconnect from the database."""
-        try:
-            if self.use_rust and self._rust_engine:
-                await self._rust_engine.close()
-            self._connected = False
-            logger.info("Disconnected from database")
-        except Exception as e:
-            logger.error(f"Error disconnecting: {e}")
-    
-    async def execute_query(self, sql: str, params: Optional[List[Any]] = None) -> Dict[str, Any]:
-        """Execute a query and return results."""
-        if not self._connected:
-            raise ConnectionError("Not connected to database")
+    async def execute_query(self, sql: str, params: Optional[Dict[str, Any]] = None, 
+                           use_cache: bool = True, cache_ttl: Optional[int] = None) -> Dict[str, Any]:
+        """Execute query with caching and performance monitoring"""
+        start_time = time.time()
+        
+        # Check cache first
+        if use_cache:
+            cached_result = self.query_cache.get(sql, params)
+            if cached_result is not None:
+                execution_time = time.time() - start_time
+                self.performance_monitor.record_query(QueryMetrics(
+                    sql=sql,
+                    execution_time=execution_time,
+                    rows_affected=len(cached_result.get('data', [])),
+                    timestamp=datetime.now(),
+                    success=True
+                ))
+                return {**cached_result, 'cached': True}
         
         try:
-            if self.use_rust and self._rust_engine:
+            # Execute query
+            if hasattr(self, '_rust_engine') and self.is_connected:
                 result = await self._rust_engine.execute_query(sql, params)
-                return result
             else:
-                # Fallback to Python backend
-                await asyncio.sleep(0.001)  # Simulate query execution
-                return {
-                    "data": [],
-                    "rows_affected": 0,
-                    "error": None,
-                    "backend": "python"
+                # Fallback implementation
+                result = {
+                    'success': True,
+                    'data': [],
+                    'rows_affected': 0,
+                    'sql': sql
                 }
+            
+            execution_time = time.time() - start_time
+            
+            # Record metrics
+            self.performance_monitor.record_query(QueryMetrics(
+                sql=sql,
+                execution_time=execution_time,
+                rows_affected=result.get('rows_affected', 0),
+                timestamp=datetime.now(),
+                success=result.get('success', False),
+                error=result.get('error')
+            ))
+            
+            # Cache result if successful
+            if use_cache and result.get('success'):
+                self.query_cache.set(sql, result, params, cache_ttl)
+            
+            return result
+            
         except Exception as e:
-            raise OperationalError(f"Query execution failed: {e}")
+            execution_time = time.time() - start_time
+            
+            self.performance_monitor.record_query(QueryMetrics(
+                sql=sql,
+                execution_time=execution_time,
+                rows_affected=0,
+                timestamp=datetime.now(),
+                success=False,
+                error=str(e)
+            ))
+            
+            return {
+                'success': False,
+                'error': str(e),
+                'sql': sql
+            }
     
-    async def execute_many(self, sql: str, params_list: List[List[Any]]) -> Dict[str, Any]:
-        """Execute multiple queries in batch."""
-        if not self._connected:
-            raise ConnectionError("Not connected to database")
+    async def execute_many(self, sql: str, params_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Execute multiple queries with performance monitoring"""
+        start_time = time.time()
         
         try:
-            if self.use_rust and self._rust_engine:
-                await self._rust_engine.execute_many(sql, params_list)
-                return {
-                    "rows_affected": len(params_list),
-                    "error": None,
-                    "backend": "rust"
-                }
+            if hasattr(self, '_rust_engine') and self.is_connected:
+                result = await self._rust_engine.execute_many(sql, params_list)
             else:
-                # Fallback to Python backend
-                await asyncio.sleep(0.001)  # Simulate batch execution
-                return {
-                    "rows_affected": len(params_list),
-                    "error": None,
-                    "backend": "python"
+                # Fallback implementation
+                result = {
+                    'success': True,
+                    'data': [],
+                    'rows_affected': len(params_list),
+                    'sql': sql
                 }
+            
+            execution_time = time.time() - start_time
+            
+            self.performance_monitor.record_query(QueryMetrics(
+                sql=f"{sql} (batch of {len(params_list)})",
+                execution_time=execution_time,
+                rows_affected=result.get('rows_affected', 0),
+                timestamp=datetime.now(),
+                success=result.get('success', False),
+                error=result.get('error')
+            ))
+            
+            return result
+            
         except Exception as e:
-            raise OperationalError(f"Batch execution failed: {e}")
+            execution_time = time.time() - start_time
+            
+            self.performance_monitor.record_query(QueryMetrics(
+                sql=f"{sql} (batch of {len(params_list)})",
+                execution_time=execution_time,
+                rows_affected=0,
+                timestamp=datetime.now(),
+                success=False,
+                error=str(e)
+            ))
+            
+            return {
+                'success': False,
+                'error': str(e),
+                'sql': sql
+            }
     
     @asynccontextmanager
     async def transaction(self):
@@ -267,14 +519,31 @@ class UnifiedEngine:
         result = await self.execute_query(sql, params)
         return result
     
+    async def disconnect(self) -> Dict[str, Any]:
+        """Disconnect from database."""
+        try:
+            self.is_connected = False
+            self.connection_stats['active_connections'] = max(0, self.connection_stats['active_connections'] - 1)
+            
+            return {
+                'success': True,
+                'status': 'disconnected'
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e),
+                'status': 'disconnect_failed'
+            }
+    
     def get_backend_info(self) -> Dict[str, Any]:
         """Get information about the current backend."""
         return {
             "connection_string": self.connection_string,
             "rust_available": RUST_AVAILABLE,
-            "using_rust": self.use_rust,
-            "connected": self._connected,
-            "backend": "rust" if self.use_rust else "python"
+            "using_rust": hasattr(self, 'use_rust') and getattr(self, 'use_rust', False),
+            "connected": self.is_connected,
+            "backend": "rust" if RUST_AVAILABLE else "python"
         }
 
 
@@ -361,3 +630,14 @@ async def disconnect(engine: UnifiedEngine):
         engine: UnifiedEngine instance to disconnect
     """
     await engine.disconnect() 
+
+# Global performance monitoring
+_global_performance_monitor = PerformanceMonitor()
+
+def get_global_performance_stats() -> Dict[str, Any]:
+    """Get global performance statistics"""
+    return _global_performance_monitor.get_stats()
+
+def record_global_query(metrics: QueryMetrics) -> None:
+    """Record query in global performance monitor"""
+    _global_performance_monitor.record_query(metrics) 

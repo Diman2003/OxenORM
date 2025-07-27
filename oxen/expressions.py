@@ -11,9 +11,9 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, cast, Union
+from typing import TYPE_CHECKING, Any, cast, Union, Optional, List, Dict
 
-from oxen.exceptions import FieldError, OperationalError
+from oxen.exceptions import FieldError, OperationalError, ValidationError
 from oxen.fields.base import Field
 from oxen.fields.data import JSONField
 from oxen.fields.relational import RelationalField
@@ -605,3 +605,243 @@ class Case(Expression):
         case_sql += " END"
         
         return ResolveResult(term=case_sql) 
+
+"""
+Advanced SQL expressions and query building for OxenORM
+"""
+
+import json
+from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
+from .exceptions import ValidationError
+
+if TYPE_CHECKING:
+    from .queryset import AwaitableQuery
+
+class WindowFunction:
+    """Window function support for advanced analytics"""
+    
+    def __init__(self, function: str, partition_by: Optional[List[str]] = None, 
+                 order_by: Optional[List[str]] = None, frame: Optional[str] = None):
+        self.function = function
+        self.partition_by = partition_by or []
+        self.order_by = order_by or []
+        self.frame = frame
+    
+    def to_sql(self) -> str:
+        sql = f"{self.function}()"
+        if self.partition_by or self.order_by or self.frame:
+            sql += " OVER ("
+            if self.partition_by:
+                sql += f"PARTITION BY {', '.join(self.partition_by)}"
+            if self.order_by:
+                if self.partition_by:
+                    sql += " "
+                sql += f"ORDER BY {', '.join(self.order_by)}"
+            if self.frame:
+                if self.partition_by or self.order_by:
+                    sql += " "
+                sql += self.frame
+            sql += ")"
+        return sql
+
+class CommonTableExpression:
+    """Common Table Expression (CTE) support"""
+    
+    def __init__(self, name: str, query: 'AwaitableQuery', recursive: bool = False):
+        self.name = name
+        self.query = query
+        self.recursive = recursive
+    
+    def to_sql(self) -> str:
+        recursive_clause = "RECURSIVE " if self.recursive else ""
+        return f"{recursive_clause}{self.name} AS ({self.query.to_sql()})"
+
+class FullTextSearch:
+    """Full-text search support"""
+    
+    def __init__(self, columns: List[str], search_term: str, 
+                 language: Optional[str] = None, rank_function: str = "ts_rank"):
+        self.columns = columns
+        self.search_term = search_term
+        self.language = language
+        self.rank_function = rank_function
+    
+    def to_sql(self) -> str:
+        columns_str = ", ".join(self.columns)
+        language_clause = f"'{self.language}'" if self.language else "simple"
+        return f"{self.rank_function}(to_tsvector({language_clause}, {columns_str}), plainto_tsquery({language_clause}, '{self.search_term}'))"
+
+class JSONPathQuery:
+    """JSON path query support for PostgreSQL JSONB"""
+    
+    def __init__(self, json_column: str, path: str, operator: str = "->"):
+        self.json_column = json_column
+        self.path = path
+        self.operator = operator
+    
+    def to_sql(self) -> str:
+        return f"{self.json_column} {self.operator} '{self.path}'"
+    
+    @classmethod
+    def contains(cls, json_column: str, path: str, value: Any) -> str:
+        """JSON contains operator"""
+        return f"{json_column} @> '{{\"{path}\": {json.dumps(value)}}}'"
+    
+    @classmethod
+    def exists(cls, json_column: str, path: str) -> str:
+        """JSON exists operator"""
+        return f"{json_column} ? '{path}'"
+
+class ArrayOperation:
+    """Array operation support"""
+    
+    def __init__(self, array_column: str, operation: str, value: Any):
+        self.array_column = array_column
+        self.operation = operation
+        self.value = value
+    
+    def to_sql(self) -> str:
+        if self.operation == "contains":
+            return f"'{self.value}' = ANY({self.array_column})"
+        elif self.operation == "overlaps":
+            return f"{self.array_column} && ARRAY[{self.value}]"
+        elif self.operation == "length":
+            return f"array_length({self.array_column}, 1)"
+        elif self.operation == "append":
+            return f"{self.array_column} || ARRAY[{self.value}]"
+        elif self.operation == "remove":
+            return f"array_remove({self.array_column}, {self.value})"
+        else:
+            raise ValidationError(f"Unsupported array operation: {self.operation}")
+
+class CaseWhen:
+    """Enhanced CASE WHEN expression with multiple conditions"""
+    
+    def __init__(self):
+        self.conditions: List[Dict[str, Any]] = []
+        self.else_value: Optional[Any] = None
+    
+    def when(self, condition: str, value: Any) -> 'CaseWhen':
+        """Add a WHEN condition"""
+        self.conditions.append({"condition": condition, "value": value})
+        return self
+    
+    def else_(self, value: Any) -> 'CaseWhen':
+        """Add ELSE clause"""
+        self.else_value = value
+        return self
+    
+    def to_sql(self) -> str:
+        if not self.conditions:
+            raise ValidationError("CASE WHEN must have at least one condition")
+        
+        sql = "CASE"
+        for condition in self.conditions:
+            sql += f" WHEN {condition['condition']} THEN {condition['value']}"
+        
+        if self.else_value is not None:
+            sql += f" ELSE {self.else_value}"
+        
+        sql += " END"
+        return sql
+
+class Subquery:
+    """Subquery support"""
+    
+    def __init__(self, query: 'AwaitableQuery', alias: Optional[str] = None):
+        self.query = query
+        self.alias = alias
+    
+    def to_sql(self) -> str:
+        sql = f"({self.query.to_sql()})"
+        if self.alias:
+            sql += f" AS {self.alias}"
+        return sql
+
+class AggregateFunction:
+    """Enhanced aggregate function support"""
+    
+    def __init__(self, function: str, column: str, distinct: bool = False, 
+                 filter_condition: Optional[str] = None):
+        self.function = function
+        self.column = column
+        self.distinct = distinct
+        self.filter_condition = filter_condition
+    
+    def to_sql(self) -> str:
+        distinct_clause = "DISTINCT " if self.distinct else ""
+        sql = f"{self.function}({distinct_clause}{self.column})"
+        
+        if self.filter_condition:
+            sql += f" FILTER (WHERE {self.filter_condition})"
+        
+        return sql
+
+class DateFunction:
+    """Date and time function support"""
+    
+    def __init__(self, function: str, column: str, interval: Optional[str] = None):
+        self.function = function
+        self.column = column
+        self.interval = interval
+    
+    def to_sql(self) -> str:
+        if self.interval:
+            return f"{self.function}({self.column}, INTERVAL '{self.interval}')"
+        return f"{self.function}({self.column})"
+    
+    @classmethod
+    def date_trunc(cls, column: str, precision: str) -> str:
+        """Date truncation function"""
+        return f"date_trunc('{precision}', {column})"
+    
+    @classmethod
+    def extract(cls, field: str, column: str) -> str:
+        """Extract date/time field"""
+        return f"EXTRACT({field} FROM {column})"
+
+class StringFunction:
+    """String function support"""
+    
+    def __init__(self, function: str, column: str, *args):
+        self.function = function
+        self.column = column
+        self.args = args
+    
+    def to_sql(self) -> str:
+        args_str = ", ".join([str(arg) for arg in self.args])
+        return f"{self.function}({self.column}{', ' + args_str if args_str else ''})"
+    
+    @classmethod
+    def concat(cls, *columns: str) -> str:
+        """String concatenation"""
+        return f"CONCAT({', '.join(columns)})"
+    
+    @classmethod
+    def substring(cls, column: str, start: int, length: Optional[int] = None) -> str:
+        """Substring function"""
+        if length:
+            return f"SUBSTRING({column} FROM {start} FOR {length})"
+        return f"SUBSTRING({column} FROM {start})"
+
+class MathFunction:
+    """Mathematical function support"""
+    
+    def __init__(self, function: str, column: str, *args):
+        self.function = function
+        self.column = column
+        self.args = args
+    
+    def to_sql(self) -> str:
+        args_str = ", ".join([str(arg) for arg in self.args])
+        return f"{self.function}({self.column}{', ' + args_str if args_str else ''})"
+    
+    @classmethod
+    def round(cls, column: str, decimals: int = 0) -> str:
+        """Round function"""
+        return f"ROUND({column}, {decimals})"
+    
+    @classmethod
+    def abs(cls, column: str) -> str:
+        """Absolute value function"""
+        return f"ABS({column})" 

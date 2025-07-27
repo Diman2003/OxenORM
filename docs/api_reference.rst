@@ -1,135 +1,26 @@
 API Reference
 ============
 
-This document provides a comprehensive reference for the OxenORM API.
+This document provides a comprehensive reference for all OxenORM APIs, including models, fields, queries, and advanced features.
 
 Models
 ------
 
-.. class:: Model
+Base Model
+~~~~~~~~~
 
-   Base class for all OxenORM models. Extends Tortoise's Model with Rust backend integration.
+.. autoclass:: oxen.models.Model
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
-   **Example:**
+Model Meta
+~~~~~~~~~~
 
-   .. code-block:: python
-
-      from oxen import Model
-      from oxen.fields import IntField, CharField
-
-      class User(Model):
-          id = IntField(primary_key=True)
-          username = CharField(max_length=50, unique=True)
-          email = CharField(max_length=100, unique=True)
-
-   **Class Methods:**
-
-   .. method:: create(**kwargs) -> Model
-
-      Create and save a new model instance.
-
-      :param kwargs: Field values for the new instance
-      :return: The created model instance
-      :raises: ValidationError, IntegrityError
-
-      **Example:**
-
-      .. code-block:: python
-
-         user = await User.create(
-             username="john_doe",
-             email="john@example.com"
-         )
-
-   .. method:: get(**kwargs) -> Model
-
-      Get a single model instance by filter criteria.
-
-      :param kwargs: Filter criteria
-      :return: The matching model instance
-      :raises: DoesNotExist, MultipleObjectsReturned
-
-      **Example:**
-
-      .. code-block:: python
-
-         user = await User.get(username="john_doe")
-
-   .. method:: filter(**kwargs) -> QuerySet
-
-      Filter model instances by criteria.
-
-      :param kwargs: Filter criteria
-      :return: QuerySet with filtered results
-
-      **Example:**
-
-      .. code-block:: python
-
-         active_users = await User.filter(is_active=True)
-
-   .. method:: all() -> QuerySet
-
-      Get all model instances.
-
-      :return: QuerySet with all instances
-
-      **Example:**
-
-      .. code-block:: python
-
-         all_users = await User.all()
-
-   .. method:: count() -> int
-
-      Count the number of model instances.
-
-      :return: Number of instances
-
-      **Example:**
-
-      .. code-block:: python
-
-         user_count = await User.count()
-
-   **Instance Methods:**
-
-   .. method:: save() -> None
-
-      Save the model instance to the database.
-
-      :raises: ValidationError, IntegrityError
-
-      **Example:**
-
-      .. code-block:: python
-
-         user.username = "new_username"
-         await user.save()
-
-   .. method:: delete() -> None
-
-      Delete the model instance from the database.
-
-      :raises: OperationalError
-
-      **Example:**
-
-      .. code-block:: python
-
-         await user.delete()
-
-   .. method:: refresh_from_db() -> None
-
-      Refresh the model instance from the database.
-
-      :raises: DoesNotExist
-
-      **Example:**
-
-      .. code-block:: python
-
-         await user.refresh_from_db()
+.. autoclass:: oxen.models.ModelMeta
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
 Fields
 ------
@@ -137,697 +28,337 @@ Fields
 Base Field
 ~~~~~~~~~~
 
-.. class:: Field
-
-   Abstract base class for all field types.
-
-   **Parameters:**
-
-   - **primary_key** (bool): Whether this field is the primary key
-   - **unique** (bool): Whether this field must be unique
-   - **null** (bool): Whether this field can be null
-   - **default**: Default value for this field
-   - **description** (str): Field description for documentation
+.. autoclass:: oxen.fields.base.Field
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
 Data Fields
-~~~~~~~~~~
+~~~~~~~~~~~
 
-.. class:: IntField
+Basic Types
+^^^^^^^^^^^
 
-   Integer field type.
+.. autoclass:: oxen.fields.data.CharField
+   :members:
+   :undoc-members:
 
-   **Parameters:**
+.. autoclass:: oxen.fields.data.TextField
+   :members:
+   :undoc-members:
 
-   - **primary_key** (bool): Whether this field is the primary key
-   - **unique** (bool): Whether this field must be unique
-   - **null** (bool): Whether this field can be null
-   - **default** (int): Default value
-   - **auto_increment** (bool): Whether this field auto-increments
+.. autoclass:: oxen.fields.data.IntField
+   :members:
+   :undoc-members:
 
-   **Example:**
+.. autoclass:: oxen.fields.data.IntegerField
+   :members:
+   :undoc-members:
 
-   .. code-block:: python
+.. autoclass:: oxen.fields.data.FloatField
+   :members:
+   :undoc-members:
 
-      id = IntField(primary_key=True, auto_increment=True)
-      age = IntField(default=18)
+.. autoclass:: oxen.fields.data.DecimalField
+   :members:
+   :undoc-members:
 
-.. class:: CharField
+.. autoclass:: oxen.fields.data.BooleanField
+   :members:
+   :undoc-members:
 
-   Character field type.
+.. autoclass:: oxen.fields.data.DateField
+   :members:
+   :undoc-members:
 
-   **Parameters:**
+.. autoclass:: oxen.fields.data.DateTimeField
+   :members:
+   :undoc-members:
 
-   - **max_length** (int): Maximum length of the string
-   - **unique** (bool): Whether this field must be unique
-   - **null** (bool): Whether this field can be null
-   - **default** (str): Default value
+.. autoclass:: oxen.fields.data.TimeField
+   :members:
+   :undoc-members:
 
-   **Example:**
+Advanced Types
+^^^^^^^^^^^^^
 
-   .. code-block:: python
+.. autoclass:: oxen.fields.data.UUIDField
+   :members:
+   :undoc-members:
 
-      username = CharField(max_length=50, unique=True)
-      name = CharField(max_length=100, default="")
+.. autoclass:: oxen.fields.data.JSONField
+   :members:
+   :undoc-members:
 
-.. class:: TextField
+.. autoclass:: oxen.fields.data.JSONBField
+   :members:
+   :undoc-members:
 
-   Text field type for long strings.
+.. autoclass:: oxen.fields.data.BinaryField
+   :members:
+   :undoc-members:
 
-   **Parameters:**
+.. autoclass:: oxen.fields.data.FileField
+   :members:
+   :undoc-members:
 
-   - **unique** (bool): Whether this field must be unique
-   - **null** (bool): Whether this field can be null
-   - **default** (str): Default value
+.. autoclass:: oxen.fields.data.ImageField
+   :members:
+   :undoc-members:
 
-   **Example:**
+PostgreSQL Specific
+^^^^^^^^^^^^^^^^^^
 
-   .. code-block:: python
+.. autoclass:: oxen.fields.data.ArrayField
+   :members:
+   :undoc-members:
 
-      bio = TextField(null=True)
-      content = TextField(default="")
+.. autoclass:: oxen.fields.data.RangeField
+   :members:
+   :undoc-members:
 
-.. class:: BooleanField
+.. autoclass:: oxen.fields.data.HStoreField
+   :members:
+   :undoc-members:
 
-   Boolean field type.
+.. autoclass:: oxen.fields.data.GeometryField
+   :members:
+   :undoc-members:
 
-   **Parameters:**
+Specialized Types
+^^^^^^^^^^^^^^^^
 
-   - **unique** (bool): Whether this field must be unique
-   - **null** (bool): Whether this field can be null
-   - **default** (bool): Default value
+.. autoclass:: oxen.fields.data.EmailField
+   :members:
+   :undoc-members:
 
-   **Example:**
-
-   .. code-block:: python
-
-      is_active = BooleanField(default=True)
-      is_verified = BooleanField(default=False)
-
-.. class:: DateTimeField
-
-   DateTime field type.
-
-   **Parameters:**
-
-   - **unique** (bool): Whether this field must be unique
-   - **null** (bool): Whether this field can be null
-   - **default**: Default value
-   - **auto_now_add** (bool): Set to current time on creation
-   - **auto_now** (bool): Set to current time on save
-
-   **Example:**
-
-   .. code-block:: python
-
-      created_at = DateTimeField(auto_now_add=True)
-      updated_at = DateTimeField(auto_now=True)
-
-.. class:: DateField
-
-   Date field type.
-
-   **Parameters:**
-
-   - **unique** (bool): Whether this field must be unique
-   - **null** (bool): Whether this field can be null
-   - **default**: Default value
-   - **auto_now_add** (bool): Set to current date on creation
-   - **auto_now** (bool): Set to current date on save
-
-   **Example:**
-
-   .. code-block:: python
-
-      birth_date = DateField(null=True)
-      created_date = DateField(auto_now_add=True)
-
-.. class:: TimeField
-
-   Time field type.
-
-   **Parameters:**
-
-   - **unique** (bool): Whether this field must be unique
-   - **null** (bool): Whether this field can be null
-   - **default**: Default value
-
-   **Example:**
-
-   .. code-block:: python
-
-      start_time = TimeField()
-      end_time = TimeField(null=True)
-
-.. class:: DecimalField
-
-   Decimal field type for precise numeric values.
-
-   **Parameters:**
-
-   - **max_digits** (int): Maximum number of digits
-   - **decimal_places** (int): Number of decimal places
-   - **unique** (bool): Whether this field must be unique
-   - **null** (bool): Whether this field can be null
-   - **default**: Default value
-
-   **Example:**
-
-   .. code-block:: python
-
-      price = DecimalField(max_digits=10, decimal_places=2)
-      rating = DecimalField(max_digits=3, decimal_places=2, default=0.0)
-
-.. class:: FloatField
-
-   Float field type.
-
-   **Parameters:**
-
-   - **unique** (bool): Whether this field must be unique
-   - **null** (bool): Whether this field can be null
-   - **default** (float): Default value
-
-   **Example:**
-
-   .. code-block:: python
-
-      score = FloatField(default=0.0)
-      temperature = FloatField(null=True)
-
-.. class:: JSONField
-
-   JSON field type for storing structured data.
-
-   **Parameters:**
-
-   - **unique** (bool): Whether this field must be unique
-   - **null** (bool): Whether this field can be null
-   - **default**: Default value
-
-   **Example:**
-
-   .. code-block:: python
-
-      metadata = JSONField(default=dict)
-      settings = JSONField(null=True)
-
-.. class:: UUIDField
-
-   UUID field type.
-
-   **Parameters:**
-
-   - **primary_key** (bool): Whether this field is the primary key
-   - **unique** (bool): Whether this field must be unique
-   - **null** (bool): Whether this field can be null
-   - **default**: Default value
-
-   **Example:**
-
-   .. code-block:: python
-
-      id = UUIDField(primary_key=True, default=uuid4)
-      reference = UUIDField(unique=True)
+.. autoclass:: oxen.fields.data.URLField
+   :members:
+   :undoc-members:
+
+.. autoclass:: oxen.fields.data.SlugField
+   :members:
+   :undoc-members:
+
+.. autoclass:: oxen.fields.data.EnumField
+   :members:
+   :undoc-members:
+
+.. autoclass:: oxen.fields.data.MoneyField
+   :members:
+   :undoc-members:
+
+.. autoclass:: oxen.fields.data.InetField
+   :members:
+   :undoc-members:
 
 Relational Fields
 ~~~~~~~~~~~~~~~~
 
-.. class:: ForeignKeyField
+.. autoclass:: oxen.fields.relational.ForeignKeyField
+   :members:
+   :undoc-members:
 
-   Foreign key field for many-to-one relationships.
+.. autoclass:: oxen.fields.relational.OneToOneField
+   :members:
+   :undoc-members:
 
-   **Parameters:**
-
-   - **to** (Model): The related model class
-   - **related_name** (str): Name for the reverse relationship
-   - **null** (bool): Whether this field can be null
-   - **on_delete** (str): Action on delete (CASCADE, SET_NULL, etc.)
-
-   **Example:**
-
-   .. code-block:: python
-
-      author = ForeignKeyField(User, related_name="posts")
-      category = ForeignKeyField(Category, related_name="products")
-
-.. class:: OneToOneField
-
-   One-to-one relationship field.
-
-   **Parameters:**
-
-   - **to** (Model): The related model class
-   - **related_name** (str): Name for the reverse relationship
-   - **null** (bool): Whether this field can be null
-   - **on_delete** (str): Action on delete
-
-   **Example:**
-
-   .. code-block:: python
-
-      profile = OneToOneField(UserProfile, related_name="user")
-
-.. class:: ManyToManyField
-
-   Many-to-many relationship field.
-
-   **Parameters:**
-
-   - **to** (Model): The related model class
-   - **related_name** (str): Name for the reverse relationship
-   - **through** (str): Custom through table name
-
-   **Example:**
-
-   .. code-block:: python
-
-      tags = ManyToManyField(Tag, related_name="posts")
-      followers = ManyToManyField(User, related_name="following")
+.. autoclass:: oxen.fields.relational.ManyToManyField
+   :members:
+   :undoc-members:
 
 QuerySet
 --------
 
-.. class:: QuerySet
+.. autoclass:: oxen.queryset.QuerySet
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
-   QuerySet for building and executing database queries.
+.. autoclass:: oxen.queryset.AwaitableQuery
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: oxen.queryset.QuerySetSingle
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Manager
+-------
+
+.. autoclass:: oxen.manager.Manager
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
-   **Methods:**
+Expressions
+-----------
+
+Base Expressions
+~~~~~~~~~~~~~~~
 
-   .. method:: filter(**kwargs) -> QuerySet
+.. autoclass:: oxen.expressions.Q
+   :members:
+   :undoc-members:
 
-      Filter the queryset by criteria.
+.. autoclass:: oxen.expressions.F
+   :members:
+   :undoc-members:
 
-      :param kwargs: Filter criteria
-      :return: Filtered QuerySet
+Advanced Query Features
+~~~~~~~~~~~~~~~~~~~~~~
 
-      **Example:**
+.. autoclass:: oxen.expressions.WindowFunction
+   :members:
+   :undoc-members:
 
-      .. code-block:: python
+.. autoclass:: oxen.expressions.CommonTableExpression
+   :members:
+   :undoc-members:
 
-         active_users = User.filter(is_active=True)
-         recent_posts = Post.filter(created_at__gte=week_ago)
+.. autoclass:: oxen.expressions.FullTextSearch
+   :members:
+   :undoc-members:
 
-   .. method:: exclude(**kwargs) -> QuerySet
+.. autoclass:: oxen.expressions.JSONPathQuery
+   :members:
+   :undoc-members:
 
-      Exclude records matching criteria.
+.. autoclass:: oxen.expressions.ArrayOperation
+   :members:
+   :undoc-members:
 
-      :param kwargs: Exclusion criteria
-      :return: Filtered QuerySet
+.. autoclass:: oxen.expressions.CaseWhen
+   :members:
+   :undoc-members:
 
-      **Example:**
+.. autoclass:: oxen.expressions.Subquery
+   :members:
+   :undoc-members:
 
-      .. code-block:: python
+.. autoclass:: oxen.expressions.AggregateFunction
+   :members:
+   :undoc-members:
 
-         non_admin_users = User.exclude(is_admin=True)
+.. autoclass:: oxen.expressions.DateFunction
+   :members:
+   :undoc-members:
 
-   .. method:: order_by(*fields) -> QuerySet
+.. autoclass:: oxen.expressions.StringFunction
+   :members:
+   :undoc-members:
 
-      Order the queryset by fields.
+.. autoclass:: oxen.expressions.MathFunction
+   :members:
+   :undoc-members:
 
-      :param fields: Field names to order by (prefix with - for descending)
-      :return: Ordered QuerySet
+Engine
+------
 
-      **Example:**
+.. autoclass:: oxen.engine.UnifiedEngine
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
-      .. code-block:: python
+.. autoclass:: oxen.engine.QueryCache
+   :members:
+   :undoc-members:
 
-         users_by_name = User.order_by("username")
-         recent_posts = Post.order_by("-created_at")
+.. autoclass:: oxen.engine.PreparedStatementCache
+   :members:
+   :undoc-members:
 
-   .. method:: limit(limit) -> QuerySet
+.. autoclass:: oxen.engine.PerformanceMonitor
+   :members:
+   :undoc-members:
 
-      Limit the number of results.
+File Operations
+--------------
 
-      :param limit: Maximum number of results
-      :return: Limited QuerySet
+.. autoclass:: oxen.file_operations.FileOperations
+   :members:
+   :undoc-members:
 
-      **Example:**
+.. autoclass:: oxen.file_operations.FileManager
+   :members:
+   :undoc-members:
 
-      .. code-block:: python
+.. autoclass:: oxen.file_operations.ImageProcessor
+   :members:
+   :undoc-members:
 
-         top_users = User.order_by("-score").limit(10)
+Signals
+-------
 
-   .. method:: offset(offset) -> QuerySet
+.. autoclass:: oxen.signals.Signals
+   :members:
+   :undoc-members:
 
-      Skip a number of results.
+Validators
+----------
 
-      :param offset: Number of results to skip
-      :return: Offset QuerySet
-
-      **Example:**
-
-      .. code-block:: python
-
-         page_2 = User.limit(20).offset(20)
-
-   .. method:: distinct() -> QuerySet
-
-      Return distinct results.
-
-      :return: Distinct QuerySet
-
-      **Example:**
-
-      .. code-block:: python
-
-         unique_categories = Post.values("category").distinct()
-
-   .. method:: values(*fields) -> List[Dict]
-
-      Return values as dictionaries.
-
-      :param fields: Field names to include
-      :return: List of dictionaries
-
-      **Example:**
-
-      .. code-block:: python
-
-         user_data = User.values("id", "username", "email")
-
-   .. method:: values_list(*fields, flat=False) -> List
-
-      Return values as lists or tuples.
-
-      :param fields: Field names to include
-      :param flat: Whether to flatten single-field results
-      :return: List of values
-
-      **Example:**
-
-      .. code-block:: python
-
-         usernames = User.values_list("username", flat=True)
-         user_tuples = User.values_list("id", "username")
-
-   .. method:: count() -> int
-
-      Count the number of results.
-
-      :return: Number of results
-
-      **Example:**
-
-      .. code-block:: python
-
-         user_count = User.filter(is_active=True).count()
-
-   .. method:: exists() -> bool
-
-      Check if any results exist.
-
-      :return: True if results exist, False otherwise
-
-      **Example:**
-
-      .. code-block:: python
-
-         has_users = User.exists()
-
-   .. method:: first() -> Model | None
-
-      Get the first result.
-
-      :return: First model instance or None
-
-      **Example:**
-
-      .. code-block:: python
-
-         first_user = User.first()
-
-   .. method:: last() -> Model | None
-
-      Get the last result.
-
-      :return: Last model instance or None
-
-      **Example:**
-
-      .. code-block:: python
-
-         last_user = User.order_by("-created_at").last()
-
-   .. method:: get(**kwargs) -> Model
-
-      Get a single result.
-
-      :param kwargs: Filter criteria
-      :return: Model instance
-      :raises: DoesNotExist, MultipleObjectsReturned
-
-      **Example:**
-
-      .. code-block:: python
-
-         user = User.get(username="john_doe")
-
-   .. method:: create(**kwargs) -> Model
-
-      Create and save a new instance.
-
-      :param kwargs: Field values
-      :return: Created model instance
-
-      **Example:**
-
-      .. code-block:: python
-
-         user = User.create(username="newuser", email="new@example.com")
-
-   .. method:: bulk_create(objects, batch_size=None) -> List[Model]
-
-      Bulk create multiple instances.
-
-      :param objects: List of model instances
-      :param batch_size: Batch size for processing
-      :return: List of created instances
-
-      **Example:**
-
-      .. code-block:: python
-
-         users = [User(username=f"user{i}") for i in range(100)]
-         created_users = User.bulk_create(users)
-
-   .. method:: update(**kwargs) -> int
-
-      Update all instances in the queryset.
-
-      :param kwargs: Field values to update
-      :return: Number of updated instances
-
-      **Example:**
-
-      .. code-block:: python
-
-         updated_count = User.filter(is_active=False).update(is_active=True)
-
-   .. method:: delete() -> int
-
-      Delete all instances in the queryset.
-
-      :return: Number of deleted instances
-
-      **Example:**
-
-      .. code-block:: python
-
-         deleted_count = User.filter(is_active=False).delete()
-
-Database Connection
-------------------
-
-.. function:: init_db(connections, default_connection=None, **kwargs) -> None
-
-   Initialize database connections.
-
-   :param connections: Dictionary mapping connection names to connection strings
-   :param default_connection: Name of the default connection
-   :param kwargs: Additional configuration options
-
-   **Example:**
-
-   .. code-block:: python
-
-      await init_db({
-          'default': 'postgresql://user:pass@localhost/mydb',
-          'readonly': 'postgresql://user:pass@readonly/mydb'
-      }, default_connection='default')
-
-.. function:: close_db() -> None
-
-   Close all database connections.
-
-   **Example:**
-
-   .. code-block:: python
-
-      await close_db()
-
-.. function:: get_connection(name=None) -> OxenEngine
-
-   Get a database connection by name.
-
-   :param name: Connection name (uses default if not specified)
-   :return: OxenEngine instance
-
-   **Example:**
-
-   .. code-block:: python
-
-      engine = get_connection('readonly')
-
-Transactions
-------------
-
-.. function:: transaction() -> AsyncContextManager
-
-   Transaction context manager.
-
-   **Example:**
-
-   .. code-block:: python
-
-      from oxen import transaction
-
-      async with transaction():
-          user = await User.create(username="john", email="john@example.com")
-          post = await Post.create(title="My Post", author=user)
+.. autoclass:: oxen.validators.Validator
+   :members:
+   :undoc-members:
 
 Exceptions
 ----------
 
-.. exception:: OxenError
+.. autoclass:: oxen.exceptions.ValidationError
+   :members:
+   :undoc-members:
 
-   Base exception for all OxenORM errors.
+.. autoclass:: oxen.exceptions.ModelError
+   :members:
+   :undoc-members:
 
-.. exception:: ConfigurationError
+.. autoclass:: oxen.exceptions.DoesNotExist
+   :members:
+   :undoc-members:
 
-   Raised when there's a configuration error.
+.. autoclass:: oxen.exceptions.MultipleObjectsReturned
+   :members:
+   :undoc-members:
 
-.. exception:: ValidationError
+.. autoclass:: oxen.exceptions.IncompleteInstanceError
+   :members:
+   :undoc-members:
 
-   Raised when field validation fails.
+.. autoclass:: oxen.exceptions.IntegrityError
+   :members:
+   :undoc-members:
 
-.. exception:: IntegrityError
+.. autoclass:: oxen.exceptions.OperationalError
+   :members:
+   :undoc-members:
 
-   Raised when database integrity constraints are violated.
+.. autoclass:: oxen.exceptions.ParamsError
+   :members:
+   :undoc-members:
 
-.. exception:: DoesNotExist
+Functions
+---------
 
-   Raised when a requested object doesn't exist.
+Connection Management
+~~~~~~~~~~~~~~~~~~~~
 
-.. exception:: MultipleObjectsReturned
+.. autofunction:: oxen.engine.connect
 
-   Raised when multiple objects are returned when only one was expected.
+.. autofunction:: oxen.engine.disconnect
 
-.. exception:: OperationalError
+.. autofunction:: oxen.engine.get_global_performance_stats
 
-   Raised when a database operation fails.
+.. autofunction:: oxen.engine.record_global_query
 
-.. exception:: ConnectionError
+File Operations
+~~~~~~~~~~~~~~
 
-   Raised when there's a connection error.
+.. autofunction:: oxen.file_operations.read_file
 
-.. exception:: MigrationError
+.. autofunction:: oxen.file_operations.write_file
 
-   Raised when a migration operation fails.
+.. autofunction:: oxen.file_operations.resize_image
 
-Query Expressions
------------------
-
-.. class:: Q
-
-   Query expression for building complex queries.
-
-   **Methods:**
-
-   .. method:: __and__(other) -> Q
-
-      Combine queries with AND.
-
-      **Example:**
-
-      .. code-block:: python
-
-         from oxen import Q
-         query = Q(is_active=True) & Q(age__gte=18)
-
-   .. method:: __or__(other) -> Q
-
-      Combine queries with OR.
-
-      **Example:**
-
-      .. code-block:: python
-
-         query = Q(is_admin=True) | Q(is_moderator=True)
-
-   .. method:: __invert__() -> Q
-
-      Negate a query.
-
-      **Example:**
-
-      .. code-block:: python
-
-         query = ~Q(is_active=False)  # Equivalent to is_active=True
-
-   **Usage:**
-
-   .. code-block:: python
-
-      from oxen import Q
-
-      # Complex queries
-      users = await User.filter(
-          Q(is_active=True) & (Q(age__gte=18) | Q(is_admin=True))
-      )
-
-      # Field lookups
-      recent_posts = await Post.filter(
-          Q(created_at__gte=week_ago) & Q(published=True)
-      )
-
-Field Lookups
-------------
-
-OxenORM supports various field lookups for filtering:
-
-- **exact**: Exact match (default)
-- **iexact**: Case-insensitive exact match
-- **contains**: Contains substring
-- **icontains**: Case-insensitive contains
-- **startswith**: Starts with substring
-- **istartswith**: Case-insensitive starts with
-- **endswith**: Ends with substring
-- **iendswith**: Case-insensitive ends with
-- **in**: Value is in list
-- **gt**: Greater than
-- **gte**: Greater than or equal
-- **lt**: Less than
-- **lte**: Less than or equal
-- **isnull**: Is null or not null
-
-**Examples:**
-
-.. code-block:: python
-
-   # Exact match
-   user = await User.get(username="john")
-
-   # Case-insensitive contains
-   users = await User.filter(username__icontains="john")
-
-   # Greater than
-   adults = await User.filter(age__gte=18)
-
-   # In list
-   admins = await User.filter(role__in=["admin", "moderator"])
-
-   # Is null
-   users_without_bio = await User.filter(bio__isnull=True)
-
-   # Not null
-   users_with_bio = await User.filter(bio__isnull=False) 
+.. autofunction:: oxen.file_operations.create_thumbnail 
