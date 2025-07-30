@@ -296,10 +296,18 @@ class UUIDField(Field):
         else:
             raise ValidationError(f"UUIDField expects string, got {type(value)}")
     
+    def to_db_value(self, value: Any) -> Any:
+        if value is None:
+            return None
+        return str(value)
+    
     def from_db_value(self, value: Any) -> Any:
         if value is None:
             return None
         return str(value)
+    
+    def _get_sql_type(self) -> str:
+        return "TEXT"
 
 class JSONField(Field):
     """JSON field"""

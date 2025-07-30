@@ -7,15 +7,16 @@ with the Python ORM layer, providing the best of both worlds.
 """
 
 import asyncio
-import time
+import time as time_module
 import hashlib
 import json
 import logging
 from typing import Dict, List, Optional, Any, Tuple
 from collections import defaultdict, OrderedDict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date, time
 from contextlib import asynccontextmanager
+from decimal import Decimal
 
 from .rust_engine import OxenEngine as RustEngine, RUST_AVAILABLE
 from .exceptions import OperationalError, ConnectionError
@@ -63,9 +64,22 @@ class QueryCache:
     
     def _generate_key(self, sql: str, params: Optional[Dict[str, Any]] = None) -> str:
         """Generate cache key from SQL and parameters"""
+        # Convert non-JSON-serializable objects to strings
+        def convert_for_json(obj):
+            if isinstance(obj, dict):
+                return {k: convert_for_json(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_for_json(v) for v in obj]
+            elif hasattr(obj, 'as_tuple'):  # Decimal objects
+                return str(obj)
+            elif isinstance(obj, (datetime, date, time)):
+                return str(obj)
+            else:
+                return obj
+        
         key_data = {
             'sql': sql,
-            'params': params or {}
+            'params': convert_for_json(params or {})
         }
         return hashlib.md5(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
     
@@ -217,9 +231,8 @@ class PerformanceMonitor:
 class UnifiedEngine:
     """Enhanced unified engine with performance optimizations"""
     
-    def __init__(self, connection_string: str, database_type: str = "sqlite"):
+    def __init__(self, connection_string: str):
         self.connection_string = connection_string
-        self.database_type = database_type
         self.is_connected = False
         
         # Performance optimizations
@@ -237,7 +250,7 @@ class UnifiedEngine:
     
     async def connect(self) -> Dict[str, Any]:
         """Connect to database with performance tracking"""
-        start_time = time.time()
+        start_time = time_module.time()
         
         try:
             # Try Rust backend first
@@ -256,7 +269,7 @@ class UnifiedEngine:
             self.connection_stats['active_connections'] += 1
             self.connection_stats['last_connection_time'] = datetime.now()
             
-            connection_time = time.time() - start_time
+            connection_time = time_module.time() - start_time
             
             return {
                 'success': True,
@@ -274,16 +287,16 @@ class UnifiedEngine:
                 'status': 'failed'
             }
     
-    async def execute_query(self, sql: str, params: Optional[Dict[str, Any]] = None, 
+    async def execute_query(self, sql: str, params: Optional[List[Any]] = None, 
                            use_cache: bool = True, cache_ttl: Optional[int] = None) -> Dict[str, Any]:
         """Execute query with caching and performance monitoring"""
-        start_time = time.time()
+        start_time = time_module.time()
         
         # Check cache first
         if use_cache:
             cached_result = self.query_cache.get(sql, params)
             if cached_result is not None:
-                execution_time = time.time() - start_time
+                execution_time = time_module.time() - start_time
                 self.performance_monitor.record_query(QueryMetrics(
                     sql=sql,
                     execution_time=execution_time,
@@ -298,15 +311,10 @@ class UnifiedEngine:
             if hasattr(self, '_rust_engine') and self.is_connected:
                 result = await self._rust_engine.execute_query(sql, params)
             else:
-                # Fallback implementation
-                result = {
-                    'success': True,
-                    'data': [],
-                    'rows_affected': 0,
-                    'sql': sql
-                }
+                # Simple SQLite fallback implementation
+                result = await self._execute_sqlite_query(sql, params)
             
-            execution_time = time.time() - start_time
+            execution_time = time_module.time() - start_time
             
             # Record metrics
             self.performance_monitor.record_query(QueryMetrics(
@@ -325,7 +333,7 @@ class UnifiedEngine:
             return result
             
         except Exception as e:
-            execution_time = time.time() - start_time
+            execution_time = time_module.time() - start_time
             
             self.performance_monitor.record_query(QueryMetrics(
                 sql=sql,
@@ -342,23 +350,79 @@ class UnifiedEngine:
                 'sql': sql
             }
     
-    async def execute_many(self, sql: str, params_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def _execute_sqlite_query(self, sql: str, params: Optional[List[Any]] = None) -> Dict[str, Any]:
+        """Execute a query using SQLite directly."""
+        import sqlite3
+        import asyncio
+        
+        def _execute_sync():
+            try:
+                conn = sqlite3.connect(self.connection_string.replace('sqlite:///', ''))
+                cursor = conn.cursor()
+                
+                if params:
+                    cursor.execute(sql, params)
+                else:
+                    cursor.execute(sql)
+                
+                # Handle different query types
+                if sql.strip().upper().startswith('SELECT'):
+                    # SELECT query
+                    rows = cursor.fetchall()
+                    columns = [description[0] for description in cursor.description]
+                    data = [dict(zip(columns, row)) for row in rows]
+                    
+                    conn.commit()
+                    conn.close()
+                    
+                    return {
+                        'success': True,
+                        'data': data,
+                        'rows_affected': len(data),
+                        'sql': sql
+                    }
+                else:
+                    # INSERT, UPDATE, DELETE query
+                    conn.commit()
+                    last_id = cursor.lastrowid
+                    rows_affected = cursor.rowcount
+                    conn.close()
+                    
+                    result = {
+                        'success': True,
+                        'rows_affected': rows_affected,
+                        'sql': sql
+                    }
+                    
+                    # For INSERT queries, include the last inserted ID
+                    if sql.strip().upper().startswith('INSERT'):
+                        result['data'] = {'id': last_id}
+                    
+                    return result
+                    
+            except Exception as e:
+                return {
+                    'success': False,
+                    'error': str(e),
+                    'sql': sql
+                }
+        
+        # Run in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _execute_sync)
+    
+    async def execute_many(self, sql: str, params_list: List[List[Any]]) -> Dict[str, Any]:
         """Execute multiple queries with performance monitoring"""
-        start_time = time.time()
+        start_time = time_module.time()
         
         try:
             if hasattr(self, '_rust_engine') and self.is_connected:
                 result = await self._rust_engine.execute_many(sql, params_list)
             else:
-                # Fallback implementation
-                result = {
-                    'success': True,
-                    'data': [],
-                    'rows_affected': len(params_list),
-                    'sql': sql
-                }
+                # SQLite fallback implementation
+                result = await self._execute_sqlite_many(sql, params_list)
             
-            execution_time = time.time() - start_time
+            execution_time = time_module.time() - start_time
             
             self.performance_monitor.record_query(QueryMetrics(
                 sql=f"{sql} (batch of {len(params_list)})",
@@ -372,7 +436,7 @@ class UnifiedEngine:
             return result
             
         except Exception as e:
-            execution_time = time.time() - start_time
+            execution_time = time_module.time() - start_time
             
             self.performance_monitor.record_query(QueryMetrics(
                 sql=f"{sql} (batch of {len(params_list)})",
@@ -388,6 +452,43 @@ class UnifiedEngine:
                 'error': str(e),
                 'sql': sql
             }
+    
+    async def _execute_sqlite_many(self, sql: str, params_list: List[List[Any]]) -> Dict[str, Any]:
+        """Execute multiple queries using SQLite directly."""
+        import sqlite3
+        import asyncio
+        
+        def _execute_sync():
+            try:
+                conn = sqlite3.connect(self.connection_string.replace('sqlite:///', ''))
+                cursor = conn.cursor()
+                
+                # Execute all queries
+                for params in params_list:
+                    cursor.execute(sql, params)
+                
+                conn.commit()
+                last_id = cursor.lastrowid
+                rows_affected = cursor.rowcount
+                conn.close()
+                
+                return {
+                    'success': True,
+                    'rows_affected': rows_affected,
+                    'sql': sql,
+                    'last_id': last_id
+                }
+                    
+            except Exception as e:
+                return {
+                    'success': False,
+                    'error': str(e),
+                    'sql': sql
+                }
+        
+        # Run in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _execute_sync)
     
     @asynccontextmanager
     async def transaction(self):
@@ -445,21 +546,50 @@ class UnifiedEngine:
     async def insert_record(self, table_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Insert a single record into a table."""
         columns = list(data.keys())
-        placeholders = ["?" for _ in columns]
-        values = list(data.values())
+        
+        # Convert values to database-compatible format
+        converted_values = []
+        for value in data.values():
+            if hasattr(value, 'as_tuple'):  # Decimal
+                if 'postgresql' in self.connection_string.lower():
+                    converted_values.append(float(value))  # PostgreSQL numeric
+                else:
+                    converted_values.append(str(value))  # SQLite text
+            elif isinstance(value, (datetime, date, time)):
+                if 'postgresql' in self.connection_string.lower():
+                    # PostgreSQL expects proper date/time types
+                    if isinstance(value, date):
+                        converted_values.append(value)  # Keep as date object
+                    elif isinstance(value, time):
+                        converted_values.append(value)  # Keep as time object
+                    elif isinstance(value, datetime):
+                        converted_values.append(value)  # Keep as datetime object
+                else:
+                    converted_values.append(str(value))  # SQLite as string
+            elif isinstance(value, dict):  # JSON field
+                import json
+                converted_values.append(json.dumps(value))
+            else:
+                converted_values.append(value)
+        
+        # Use appropriate placeholders based on database type
+        if 'postgresql' in self.connection_string.lower():
+            placeholders = [f"${i+1}" for i in range(len(columns))]
+        else:
+            placeholders = ["?" for _ in columns]
         
         sql = f"""
         INSERT INTO "{table_name}" ({', '.join(f'"{col}"' for col in columns)})
         VALUES ({', '.join(placeholders)})
         """
         
-        result = await self.execute_query(sql, values)
+        result = await self.execute_query(sql, converted_values)
         return result
     
     async def insert_many(self, table_name: str, records: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Insert multiple records into a table."""
         if not records:
-            return {"rows_affected": 0}
+            return {"success": True, "rows_affected": 0, "data": {"ids": []}}
         
         columns = list(records[0].keys())
         placeholders = ["?" for _ in columns]
@@ -471,6 +601,20 @@ class UnifiedEngine:
         
         params_list = [list(record.values()) for record in records]
         result = await self.execute_many(sql, params_list)
+        
+        # Add generated IDs to result
+        if result.get('success'):
+            # For SQLite, we need to get the IDs by querying the last inserted rows
+            # This is a simplified approach - in production, you might want to use a more robust method
+            ids = []
+            if len(records) > 0:
+                # Get the last inserted ID and work backwards
+                last_id = result.get('last_id', 0)
+                for i in range(len(records)):
+                    ids.append(last_id - len(records) + 1 + i)
+            
+            result['data'] = {'ids': ids}
+        
         return result
     
     async def select_records(self, table_name: str, conditions: Optional[Dict[str, Any]] = None, 
@@ -498,17 +642,57 @@ class UnifiedEngine:
     async def update_records(self, table_name: str, data: Dict[str, Any], 
                            conditions: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Update records in a table."""
-        set_clauses = [f'"{key}" = ?' for key in data.keys()]
-        params = list(data.values())
+        # Convert values to database-compatible format
+        converted_data = {}
+        for key, value in data.items():
+            if hasattr(value, 'as_tuple'):  # Decimal
+                if 'postgresql' in self.connection_string.lower():
+                    converted_data[key] = float(value)  # PostgreSQL numeric
+                else:
+                    converted_data[key] = str(value)  # SQLite text
+            elif isinstance(value, (datetime, date, time)):
+                if 'postgresql' in self.connection_string.lower():
+                    # PostgreSQL expects proper date/time types
+                    if isinstance(value, date):
+                        converted_data[key] = value  # Keep as date object
+                    elif isinstance(value, time):
+                        converted_data[key] = value  # Keep as time object
+                    elif isinstance(value, datetime):
+                        converted_data[key] = value  # Keep as datetime object
+                else:
+                    converted_data[key] = str(value)  # SQLite as string
+            elif isinstance(value, dict):  # JSON field
+                import json
+                converted_data[key] = json.dumps(value)
+            else:
+                converted_data[key] = value
         
-        sql = f'UPDATE "{table_name}" SET {", ".join(set_clauses)}'
-        
-        if conditions:
-            where_clauses = []
-            for key, value in conditions.items():
-                where_clauses.append(f'"{key}" = ?')
-                params.append(value)
-            sql += f" WHERE {' AND '.join(where_clauses)}"
+        # Use appropriate placeholders based on database type
+        if 'postgresql' in self.connection_string.lower():
+            set_clauses = [f'"{key}" = ${i+1}' for i, key in enumerate(converted_data.keys())]
+            params = list(converted_data.values())
+            
+            sql = f'UPDATE "{table_name}" SET {", ".join(set_clauses)}'
+            
+            if conditions:
+                where_clauses = []
+                for key, value in conditions.items():
+                    param_index = len(params) + 1
+                    where_clauses.append(f'"{key}" = ${param_index}')
+                    params.append(value)
+                sql += f" WHERE {' AND '.join(where_clauses)}"
+        else:
+            set_clauses = [f'"{key}" = ?' for key in converted_data.keys()]
+            params = list(converted_data.values())
+            
+            sql = f'UPDATE "{table_name}" SET {", ".join(set_clauses)}'
+            
+            if conditions:
+                where_clauses = []
+                for key, value in conditions.items():
+                    where_clauses.append(f'"{key}" = ?')
+                    params.append(value)
+                sql += f" WHERE {' AND '.join(where_clauses)}"
         
         result = await self.execute_query(sql, params)
         return result
@@ -581,7 +765,18 @@ class UnifiedTransaction:
 # Convenience function to create a unified engine
 def create_engine(connection_string: str, use_rust: bool = True) -> UnifiedEngine:
     """Create a unified engine instance."""
-    return UnifiedEngine(connection_string, use_rust)
+    engine = UnifiedEngine(connection_string)
+    
+    # Initialize Rust backend if available and requested
+    if use_rust and RUST_AVAILABLE:
+        try:
+            from .rust_bridge import OxenEngine
+            engine._rust_engine = OxenEngine(connection_string)
+            print(f"✅ Rust backend initialized for: {connection_string}")
+        except Exception as e:
+            print(f"⚠️  Failed to initialize Rust backend: {e}")
+    
+    return engine
 
 
 # Global engine registry for multi-database support
@@ -628,6 +823,11 @@ async def connect(connection_string: str, use_rust: bool = True) -> UnifiedEngin
     """
     engine = create_engine(connection_string, use_rust)
     await engine.connect()
+    
+    # Set the database connection for all models
+    from oxen.models import set_database_for_models
+    set_database_for_models(engine)
+    
     return engine
 
 
