@@ -4,6 +4,13 @@
 
 OxenORM is configured for automatic deployment to PyPI using GitHub Actions. The deployment is triggered when a new release is created on GitHub.
 
+## ✅ **DEPLOYMENT SUCCESSFUL!**
+
+**Package Name**: `oxen-orm`  
+**Version**: `0.1.0`  
+**PyPI URL**: https://pypi.org/project/oxen-orm/0.1.0/  
+**Install Command**: `pip install oxen-orm`
+
 ## Automatic Deployment
 
 ### How it works:
@@ -71,10 +78,20 @@ The package is configured in:
 ✅ **GitHub Actions**: Configured
 ✅ **Build System**: Working
 ✅ **Local Build**: Successful
+✅ **PyPI Upload**: **SUCCESSFUL**
+✅ **Package Available**: https://pypi.org/project/oxen-orm/0.1.0/
+
+## Installation
+
+Users can now install the package using:
+
+```bash
+pip install oxen-orm
+```
 
 ## Next Steps
 
-1. Set up PyPI API token in GitHub Secrets
+1. Set up PyPI API token in GitHub Secrets for automatic deployment
 2. Create a GitHub release to trigger automatic deployment
 3. Monitor the deployment process
 4. Verify the package appears on PyPI
@@ -94,7 +111,7 @@ The package is configured in:
 python -m build
 
 # Check package contents
-tar -tzf dist/oxenorm-*.tar.gz
+tar -tzf dist/oxen_orm-*.tar.gz
 
 # Validate package
 twine check dist/*
@@ -102,8 +119,9 @@ twine check dist/*
 
 ## Package Information
 
-- **Name**: `oxenorm`
+- **Name**: `oxen-orm`
 - **Version**: `0.1.0`
 - **Description**: High-performance Python ORM backed by Rust
 - **Dependencies**: pydantic, typing-extensions, click
-- **Python Versions**: 3.9+ 
+- **Python Versions**: 3.9+
+- **PyPI URL**: https://pypi.org/project/oxen-orm/0.1.0/ 
