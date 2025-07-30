@@ -99,8 +99,20 @@
 ### Installation
 
 ```bash
-# Install with pip (pre-built wheels available)
+# Basic installation
 pip install oxen-orm
+
+# With database drivers
+pip install "oxen-orm[postgres,mysql,sqlite]"
+
+# With performance optimizations (uvloop)
+pip install "oxen-orm[performance]"
+
+# Development installation
+pip install "oxen-orm[dev]"
+
+# Full installation with all features
+pip install "oxen-orm[dev,postgres,mysql,sqlite,performance]"
 
 # Or build from source
 git clone https://github.com/Diman2003/OxenORM.git

@@ -5,6 +5,9 @@ OxenORM - High-performance Python ORM with Rust backend
 __version__ = "0.1.0"
 __author__ = "OxenORM Team"
 
+# Configure uvloop for enhanced performance
+from .uvloop_config import configure_uvloop, is_uvloop_active, get_event_loop_info
+
 # Core imports
 from .models import Model, ModelMeta
 from .fields import (
@@ -44,5 +47,6 @@ __all__ = [
     'IncompleteInstanceError', 'IntegrityError', 'OperationalError', 'ParamsError',
     'QuerySet', 'AwaitableQuery', 'QuerySetSingle', 'Manager', 'Signals', 'Validator',
     'connect', 'disconnect', 'FileOperations', 'FileManager', 'ImageProcessor',
-    'OxenEngine', 'RUST_AVAILABLE'
+    'OxenEngine', 'RUST_AVAILABLE',
+    'configure_uvloop', 'is_uvloop_active', 'get_event_loop_info'
 ] 

@@ -82,6 +82,8 @@ class PerformanceConfig:
     enable_query_logging: bool = True
     enable_performance_monitoring: bool = True
     slow_query_threshold: float = 1.0
+    use_uvloop: bool = True
+    uvloop_auto_configure: bool = True
 
 
 @dataclass
@@ -173,6 +175,8 @@ class OxenConfig:
         # Performance
         config.performance.query_cache_size = int(os.getenv('OXEN_CACHE_SIZE', '1000'))
         config.performance.enable_performance_monitoring = os.getenv('OXEN_ENABLE_MONITORING', 'true').lower() == 'true'
+        config.performance.use_uvloop = os.getenv('OXEN_UVLOOP', 'true').lower() == 'true'
+        config.performance.uvloop_auto_configure = os.getenv('OXEN_UVLOOP_AUTO', 'true').lower() == 'true'
         
         # Logging
         config.logging.level = os.getenv('OXEN_LOG_LEVEL', 'INFO')
@@ -243,7 +247,9 @@ class OxenConfig:
             'performance': {
                 'query_cache_size': self.performance.query_cache_size,
                 'enable_performance_monitoring': self.performance.enable_performance_monitoring,
-                'slow_query_threshold': self.performance.slow_query_threshold
+                'slow_query_threshold': self.performance.slow_query_threshold,
+                'use_uvloop': self.performance.use_uvloop,
+                'uvloop_auto_configure': self.performance.uvloop_auto_configure
             },
             'logging': {
                 'level': self.logging.level,

@@ -11,4 +11,7 @@ mypy
 # Database drivers (optional - for testing with different databases)
 # asyncpg  # PostgreSQL
 # aiomysql   # MySQL
-# aiosqlite # SQLite 
+# aiosqlite # SQLite
+
+# Performance optimization (optional - for enhanced performance)
+# uvloop  # Fast event loop implementation 
