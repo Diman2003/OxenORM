@@ -15,7 +15,7 @@ from enum import Enum
 
 from oxen.exceptions import (
     DoesNotExist, FieldError, IntegrityError, MultipleObjectsReturned,
-    ParamsError, ValidationError
+    ParamsError, ValidationError, OperationalError
 )
 from oxen.expressions import Expression, Q, RawSQL, ResolveContext, ResolveResult
 from oxen.fields.relational import (
@@ -51,7 +51,15 @@ class QuerySetSingle(Generic[T_co]):
     
     def __await__(self) -> Generator[Any, None, T_co]:
         """Make the queryset awaitable."""
-        raise NotImplementedError()
+        async def _self() -> T_co:
+            results = await self.queryset._execute()
+            if self.queryset._single:
+                if not results and hasattr(self.queryset, '_raise_does_not_exist') and self.queryset._raise_does_not_exist:
+                    raise DoesNotExist(f"No {self.queryset.model.__name__} matches the given query.")
+                return results[0] if results else None
+            else:
+                return results[0] if results else None
+        return _self().__await__()
 
     def prefetch_related(
         self, *args: str | Prefetch
@@ -421,11 +429,7 @@ class QuerySet(AwaitableQuery[MODEL]):
         return DeleteQuery(
             model=self.model,
             db=self._db,
-            q_objects=self._q_objects,
-            annotations=self._annotations,
-            custom_filters=self._custom_filters,
-            limit=self._limit,
-            orderings=self._orderings,
+            q_objects=self._q_objects
         )
 
     def update(self, **kwargs: Any) -> 'UpdateQuery':
@@ -445,7 +449,12 @@ class QuerySet(AwaitableQuery[MODEL]):
         """Count matching records."""
         return CountQuery(
             model=self.model,
-            db=self._db
+            db=self._db,
+            q_objects=self._q_objects,
+            annotations=self._annotations,
+            custom_filters=self._custom_filters,
+            force_indexes=self._force_indexes,
+            use_indexes=self._use_indexes,
         )
 
     def exists(self) -> 'ExistsQuery':
@@ -642,9 +651,112 @@ class QuerySet(AwaitableQuery[MODEL]):
 
     async def _execute(self) -> list[MODEL]:
         """Execute the query and return results."""
-        # This would be implemented with actual database execution
-        # For now, return empty list
-        return []
+        # Get database connection
+        db = self._choose_db()
+        if not db:
+            raise OperationalError("No database connection available")
+        
+        # Build conditions from filters
+        conditions = {}
+        for q_obj in self._q_objects:
+            # Handle Q objects properly
+            if hasattr(q_obj, 'filters'):
+                conditions.update(q_obj.filters)
+            elif hasattr(q_obj, 'children'):
+                for child in q_obj.children:
+                    if hasattr(child, 'filters'):
+                        conditions.update(child.filters)
+                    elif isinstance(child, dict):
+                        conditions.update(child)
+            elif isinstance(q_obj, dict):
+                conditions.update(q_obj)
+            else:
+                # Try to convert to dict
+                try:
+                    conditions.update(dict(q_obj))
+                except:
+                    # Skip if can't convert
+                    pass
+        
+        # Build the query
+        query = f"SELECT * FROM {self.model._meta.table_name}"
+        params = []
+        
+        # Add WHERE clause if conditions exist
+        if conditions:
+            where_clauses = []
+            for key, value in conditions.items():
+                # Handle field lookups like age__lt
+                if '__' in key:
+                    field_name, lookup = key.split('__', 1)
+                    if lookup == 'lt':
+                        where_clauses.append(f"{field_name} < ?")
+                        params.append(value)
+                    elif lookup == 'lte':
+                        where_clauses.append(f"{field_name} <= ?")
+                        params.append(value)
+                    elif lookup == 'gt':
+                        where_clauses.append(f"{field_name} > ?")
+                        params.append(value)
+                    elif lookup == 'gte':
+                        where_clauses.append(f"{field_name} >= ?")
+                        params.append(value)
+                    elif lookup == 'startswith':
+                        where_clauses.append(f"{field_name} LIKE ?")
+                        params.append(f"{value}%")
+                    elif lookup == 'endswith':
+                        where_clauses.append(f"{field_name} LIKE ?")
+                        params.append(f"%{value}")
+                    elif lookup == 'contains':
+                        where_clauses.append(f"{field_name} LIKE ?")
+                        params.append(f"%{value}%")
+                    elif lookup == 'in':
+                        if isinstance(value, (list, tuple)):
+                            placeholders = ', '.join(['?' for _ in value])
+                            where_clauses.append(f"{field_name} IN ({placeholders})")
+                            params.extend(value)
+                        else:
+                            where_clauses.append(f"{field_name} IN (?)")
+                            params.append(value)
+                    else:
+                        # Unknown lookup, treat as exact match
+                        where_clauses.append(f"{field_name} = ?")
+                        params.append(value)
+                else:
+                    where_clauses.append(f"{key} = ?")
+                    params.append(value)
+            
+            if where_clauses:
+                query += " WHERE " + " AND ".join(where_clauses)
+        
+        # Add ORDER BY clause
+        if self._orderings:
+            order_clauses = []
+            for field, direction in self._orderings:
+                order_clauses.append(f"{field} {direction.value}")
+            query += " ORDER BY " + ", ".join(order_clauses)
+        
+        # Add LIMIT clause
+        if self._limit is not None:
+            query += f" LIMIT {self._limit}"
+        
+        # Add OFFSET clause
+        if self._offset is not None:
+            query += f" OFFSET {self._offset}"
+        
+        # Execute the query
+        result = await db.execute_query(query, params if params else None)
+        
+        if result.get('error') is None:
+            records = result.get('data', [])
+            instances = []
+            for record in records:
+                instance = self.model._init_from_db(**record)
+                instance._meta.db = db
+                instances.append(instance)
+            return instances
+        else:
+            raise OperationalError(f"Failed to execute query: {result.get('error', 'Unknown error')}")
 
 
 # Placeholder classes for other query types
@@ -654,18 +766,141 @@ class UpdateQuery(AwaitableQuery):
 
 class DeleteQuery(AwaitableQuery):
     """Query for deleting records."""
-    pass
+    
+    def __init__(self, model: type[MODEL], db: Any = None, q_objects: list[Q] = None):
+        super().__init__(model)
+        self._db = db
+        self._q_objects = q_objects or []
+    
+    def __await__(self) -> Generator[Any, None, int]:
+        """Make the delete query awaitable."""
+        async def _self() -> int:
+            return await self._execute()
+        return _self().__await__()
+    
+    async def _execute(self) -> int:
+        """Execute the delete query and return the number of deleted records."""
+        # Get database connection
+        db = self._choose_db()
+        if not db:
+            raise OperationalError("No database connection available")
+        
+        # Build conditions from filters
+        conditions = {}
+        for q_obj in self._q_objects:
+            # Handle Q objects properly
+            if hasattr(q_obj, 'filters'):
+                # This is a Q object with filters
+                conditions.update(q_obj.filters)
+            elif hasattr(q_obj, 'children'):
+                # This is a Q object with children
+                for child in q_obj.children:
+                    if hasattr(child, 'filters'):
+                        conditions.update(child.filters)
+                    elif isinstance(child, dict):
+                        conditions.update(child)
+            elif isinstance(q_obj, dict):
+                # This is a simple dict
+                conditions.update(q_obj)
+            else:
+                # Try to convert to dict
+                try:
+                    conditions.update(dict(q_obj))
+                except:
+                    # Skip if can't convert
+                    pass
+        
+        # Build the DELETE query with proper field lookup processing
+        query = f"DELETE FROM {self.model._meta.table_name}"
+        params = []
+        
+        # Add WHERE clause if conditions exist
+        if conditions:
+            where_clauses = []
+            for key, value in conditions.items():
+                # Handle field lookups like age__lt
+                if '__' in key:
+                    field_name, lookup = key.split('__', 1)
+                    if lookup == 'lt':
+                        where_clauses.append(f"{field_name} < ?")
+                        params.append(value)
+                    elif lookup == 'lte':
+                        where_clauses.append(f"{field_name} <= ?")
+                        params.append(value)
+                    elif lookup == 'gt':
+                        where_clauses.append(f"{field_name} > ?")
+                        params.append(value)
+                    elif lookup == 'gte':
+                        where_clauses.append(f"{field_name} >= ?")
+                        params.append(value)
+                    elif lookup == 'startswith':
+                        where_clauses.append(f"{field_name} LIKE ?")
+                        params.append(f"{value}%")
+                    elif lookup == 'endswith':
+                        where_clauses.append(f"{field_name} LIKE ?")
+                        params.append(f"%{value}")
+                    elif lookup == 'contains':
+                        where_clauses.append(f"{field_name} LIKE ?")
+                        params.append(f"%{value}%")
+                    elif lookup == 'in':
+                        if isinstance(value, (list, tuple)):
+                            placeholders = ', '.join(['?' for _ in value])
+                            where_clauses.append(f"{field_name} IN ({placeholders})")
+                            params.extend(value)
+                        else:
+                            where_clauses.append(f"{field_name} IN (?)")
+                            params.append(value)
+                    else:
+                        # Unknown lookup, treat as exact match
+                        where_clauses.append(f"{field_name} = ?")
+                        params.append(value)
+                else:
+                    where_clauses.append(f"{key} = ?")
+                    params.append(value)
+            
+            if where_clauses:
+                query += " WHERE " + " AND ".join(where_clauses)
+        
+        # Execute the delete query
+        result = await db.execute_query(query, params if params else None)
+        
+        if result.get('error') is None:
+            return result.get('rows_affected', 0)
+        else:
+            raise OperationalError(f"Failed to execute delete query: {result.get('error', 'Unknown error')}")
 
 class ExistsQuery(AwaitableQuery):
     """Query for checking existence."""
-    pass
+    
+    def __await__(self) -> Generator[Any, None, bool]:
+        """Make the exists query awaitable."""
+        async def _self() -> bool:
+            return await self._execute()
+        return _self().__await__()
+    
+    async def _execute(self) -> bool:
+        """Execute the exists query and return True if any records exist."""
+        # Use count query with limit 1 for efficiency
+        count_query = CountQuery(self.model, self._db)
+        count_query._q_objects = self._q_objects
+        count_query._limit = 1
+        
+        count = await count_query._execute()
+        return count > 0
 
 class CountQuery(AwaitableQuery):
     """Query for counting records."""
     
-    def __init__(self, model: type[MODEL], db: Any = None):
+    def __init__(self, model: type[MODEL], db: Any = None, q_objects: list[Q] = None, 
+                 annotations: dict[str, Any] = None, custom_filters: dict[str, Any] = None,
+                 force_indexes: list[str] = None, use_indexes: list[str] = None):
         super().__init__(model)
         self._db = db
+        self._q_objects = q_objects or []
+        self._annotations = annotations or {}
+        self._custom_filters = custom_filters or {}
+        self._force_indexes = force_indexes or []
+        self._use_indexes = use_indexes or []
     
     def __await__(self) -> Generator[Any, None, int]:
         """Make the count query awaitable."""
@@ -675,9 +910,97 @@ class CountQuery(AwaitableQuery):
     
     async def _execute(self) -> int:
         """Execute the count query and return the count."""
-        # This would be implemented with actual database execution
-        # For now, return 0
-        return 0
+        # Get database connection
+        db = self._choose_db()
+        if not db:
+            raise OperationalError("No database connection available")
+        
+        # Build conditions from filters
+        conditions = {}
+        for q_obj in self._q_objects:
+            # Handle Q objects properly
+            if hasattr(q_obj, 'filters'):
+                # This is a Q object with filters
+                conditions.update(q_obj.filters)
+            elif hasattr(q_obj, 'children'):
+                # This is a Q object with children
+                for child in q_obj.children:
+                    if hasattr(child, 'filters'):
+                        conditions.update(child.filters)
+                    elif isinstance(child, dict):
+                        conditions.update(child)
+            elif isinstance(q_obj, dict):
+                # This is a simple dict
+                conditions.update(q_obj)
+            else:
+                # Try to convert to dict
+                try:
+                    conditions.update(dict(q_obj))
+                except:
+                    # Skip if can't convert
+                    pass
+        
+        # Build the count query
+        query = f"SELECT COUNT(*) as count FROM {self.model._meta.table_name}"
+        params = []
+        
+        # Add WHERE clause if conditions exist
+        if conditions:
+            where_clauses = []
+            for key, value in conditions.items():
+                # Handle field lookups like age__lt
+                if '__' in key:
+                    field_name, lookup = key.split('__', 1)
+                    if lookup == 'lt':
+                        where_clauses.append(f"{field_name} < ?")
+                        params.append(value)
+                    elif lookup == 'lte':
+                        where_clauses.append(f"{field_name} <= ?")
+                        params.append(value)
+                    elif lookup == 'gt':
+                        where_clauses.append(f"{field_name} > ?")
+                        params.append(value)
+                    elif lookup == 'gte':
+                        where_clauses.append(f"{field_name} >= ?")
+                        params.append(value)
+                    elif lookup == 'in':
+                        if isinstance(value, (list, tuple)):
+                            placeholders = ', '.join(['?' for _ in value])
+                            where_clauses.append(f"{field_name} IN ({placeholders})")
+                            params.extend(value)
+                        else:
+                            where_clauses.append(f"{field_name} IN (?)")
+                            params.append(value)
+                    elif lookup == 'contains':
+                        where_clauses.append(f"{field_name} LIKE ?")
+                        params.append(f"%{value}%")
+                    elif lookup == 'startswith':
+                        where_clauses.append(f"{field_name} LIKE ?")
+                        params.append(f"{value}%")
+                    elif lookup == 'endswith':
+                        where_clauses.append(f"{field_name} LIKE ?")
+                        params.append(f"%{value}")
+                    else:
+                        # Unknown lookup, treat as exact match
+                        where_clauses.append(f"{field_name} = ?")
+                        params.append(value)
+                else:
+                    where_clauses.append(f"{key} = ?")
+                    params.append(value)
+            
+            if where_clauses:
+                query += " WHERE " + " AND ".join(where_clauses)
+        
+        # Execute the count query
+        result = await db.execute_query(query, params if params else None)
+        
+        if result.get('error') is None:
+            records = result.get('data', [])
+            if records:
+                return records[0].get('count', 0)
+            return 0
+        else:
+            raise OperationalError(f"Failed to execute count query: {result.get('error', 'Unknown error')}")
 
 class ValuesListQuery(AwaitableQuery, Generic[SINGLE]):
     """Query for returning values as lists."""
