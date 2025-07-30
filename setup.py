@@ -9,7 +9,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="oxenorm",
+    name="oxen-orm",
     version="0.1.0",
     author="OxenORM Team",
     author_email="team@oxenorm.dev",

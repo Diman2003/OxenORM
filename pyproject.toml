@@ -1,5 +1,5 @@
 [project]
-name = "oxenorm"
+name = "oxen-orm"
 version = "0.1.0"
 description = "High-performance Python ORM backed by Rust - 15× faster than SQLAlchemy"
 authors = [{name="OxenORM Team", email="team@oxenorm.dev"}]
