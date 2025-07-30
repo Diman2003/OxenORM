@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Setup script for OxenORM CLI tool.
+Setup script for OxenORM.
 """
 
 from setuptools import setup, find_packages
@@ -9,11 +9,11 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="oxenorm-cli",
+    name="oxenorm",
     version="0.1.0",
     author="OxenORM Team",
     author_email="team@oxenorm.dev",
-    description="Fast, async Python ORM with Rust backend - CLI Tools",
+    description="High-performance Python ORM backed by Rust - 15× faster than SQLAlchemy",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/Diman2003/OxenORM",
@@ -24,7 +24,6 @@ setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
@@ -32,11 +31,11 @@ setup(
         "Topic :: Database",
         "Topic :: Software Development :: Libraries :: Python Modules",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.9",
     install_requires=[
-        "pyo3>=0.19.0",
-        "sqlx>=0.7.0",
-        "asyncpg>=0.28.0",
+        "pydantic>=2.0.0",
+        "typing-extensions>=4.0.0",
+        "click>=8.0.0",
     ],
     entry_points={
         "console_scripts": [

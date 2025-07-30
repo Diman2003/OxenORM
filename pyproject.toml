@@ -1,21 +1,17 @@
 [project]
-name = "oxen-orm"
+name = "oxenorm"
 version = "0.1.0"
 description = "High-performance Python ORM backed by Rust - 15× faster than SQLAlchemy"
 authors = [{name="OxenORM Team", email="team@oxenorm.dev"}]
 license = {text="MIT"}
 readme = "README.md"
 keywords = ["sql", "mysql", "postgres", "sqlite", "relational", "database", "rdbms", "orm", "object mapper", "async", "asyncio", "rust", "high-performance"]
-include = ["LICENSE", "README.md"]
 dynamic = ["classifiers"]
 requires-python = ">=3.9"
 dependencies = [
     "pydantic>=2.0.0",
     "typing-extensions>=4.0.0",
     "click>=8.0.0",
-    "matplotlib>=3.0.0",
-    "seaborn>=0.11.0",
-    "numpy>=1.20.0",
 ]
 
 [project.scripts]
@@ -42,13 +38,14 @@ issues = "https://github.com/Diman2003/OxenORM/issues"
 discussions = "https://github.com/Diman2003/OxenORM/discussions"
 
 [build-system]
-requires = ["maturin>=1.0.0"]
-build-backend = "maturin"
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
-[tool.maturin]
-features = ["pyo3/extension-module"]
-module-name = "oxen_engine"
-python-sources = "oxen"
+[tool.setuptools.packages.find]
+include = ["oxen*"]
+
+[tool.setuptools]
+include-package-data = true
 
 [tool.mypy]
 python_version = "3.9"
