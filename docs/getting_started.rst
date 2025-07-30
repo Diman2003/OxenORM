@@ -6,7 +6,7 @@ Getting started
 
 Installation
 ===============
-The following table shows the available installation options for different databases (note that there are multiple options of clients for some databases):
+The following table shows the available installation options for different databases:
 
 .. list-table:: Available Installation Options
    :header-rows: 1
@@ -15,20 +15,11 @@ The following table shows the available installation options for different datab
    * - Database
      - Installation Command
    * - SQLite
-     - ``pip install tortoise-orm``
-   * - PostgreSQL (psycopg)
-     - ``pip install "tortoise-orm[psycopg]"``
-   * - PostgreSQL (asyncpg)
-     - ``pip install "tortoise-orm[asyncpg]"``
-   * - MySQL (aiomysql)
-     - ``pip install "tortoise-orm[aiomysql]"``
-   * - MySQL (asyncmy)
-     - ``pip install "tortoise-orm[asyncmy]"``
-   * - MS SQL
-     - ``pip install "tortoise-orm[asyncodbc]"``
-   * - Oracle
-     - ``pip install "tortoise-orm[asyncodbc]"``
-
+     - ``pip install oxen-orm``
+   * - PostgreSQL
+     - ``pip install "oxen-orm[postgres]"``
+   * - MySQL
+     - ``pip install "oxen-orm[mysql]"``
 
 Optional Dependencies
 ---------------------
@@ -43,117 +34,240 @@ The following command will install all optional dependencies:
 
 .. code-block:: bash
 
-    pip install "tortoise-orm[accel]"
-..
+    pip install "oxen-orm[dev]"
 
 Tutorial
 ========
 
-Define the models by inheriting from ``tortoise.models.Model``.
+Define the models by inheriting from ``oxen.Model``.
 
 .. code-block:: python3
 
-    from tortoise.models import Model
-    from tortoise import fields
+    from oxen import Model
+    from oxen.fields import CharField, IntField, BooleanField
 
     class Tournament(Model):
-        # Defining `id` field is optional, it will be defined automatically
-        # if you haven't done it yourself
-        id = fields.IntField(primary_key=True)
-        name = fields.CharField(max_length=255)
-
+        id = IntField(primary_key=True)
+        name = CharField(max_length=255)
+        is_active = BooleanField(default=True)
 
     class Event(Model):
-        id = fields.IntField(primary_key=True)
-        name = fields.CharField(max_length=255)
-        # References to other models are defined in format
-        # "{app_name}.{model_name}" - where {app_name} is defined in the tortoise config
-        tournament = fields.ForeignKeyField('models.Tournament', related_name='events')
-        participants = fields.ManyToManyField('models.Team', related_name='events', through='event_team')
-
+        id = IntField(primary_key=True)
+        name = CharField(max_length=255)
+        tournament = IntField()  # Foreign key reference
+        participants = CharField(max_length=1000)  # JSON field for many-to-many
 
     class Team(Model):
-        id = fields.IntField(primary_key=True)
-        name = fields.CharField(max_length=255)
+        id = IntField(primary_key=True)
+        name = CharField(max_length=255)
 
 .. note::
    You can read more on defining models in :ref:`models`
 
-After defining the models, Tortoise ORM needs to be initialized to establish the relationships between models and connect to the database.
-The code below creates a connection to a SQLite DB database with the ``aiosqlite`` client. ``generate_schema`` sets up schema on an empty database.
-``generate_schema`` is for development purposes only, see :ref:`migration` for schema migration tools.
+After defining the models, OxenORM needs to be initialized to establish the relationships between models and connect to the database.
+The code below creates a connection to a SQLite DB database. ``create_table`` sets up schema on an empty database.
 
 .. code-block:: python3
 
-    from tortoise import Tortoise, run_async
+    from oxen import connect
+    import asyncio
 
     async def main():
         # Here we connect to a SQLite DB file.
-        # also specify the app name of "models"
-        # which contain models from "app.models
-        await Tortoise.init(
-            db_url='sqlite://db.sqlite3',
-            modules={'models': ['app.models']}
-        )
-        await Tortoise.generate_schemas()
+        await connect('sqlite://db.sqlite3')
+        
+        # Create tables
+        await Tournament.create_table()
+        await Event.create_table()
+        await Team.create_table()
 
-    run_async(main())
+    asyncio.run(main())
 
-
-``run_async`` is a helper function to run simple Tortoise scripts. For production use, see :ref:`contrib_fastapi`, :ref:`contrib_sanic` and other integrations, as welll as check out :ref:`cleaningup`.
-
-With the Tortoise initialized, the models are available for use:
+With OxenORM initialized, the models are available for use:
 
 .. code-block:: python3
 
     async def main():
-        await Tortoise.init(
-            db_url='sqlite://db.sqlite3',
-            modules={'models': ['app.models']}
-        )
-        await Tortoise.generate_schemas()
+        await connect('sqlite://db.sqlite3')
+        
+        # Create tables
+        await Tournament.create_table()
+        await Event.create_table()
+        await Team.create_table()
 
         # Creating an instance with .save()
         tournament = Tournament(name='New Tournament')
         await tournament.save()
 
         # Or with .create()
-        await Event.create(name='Without participants', tournament=tournament)
-        event = await Event.create(name='Test', tournament=tournament)
+        await Event.create(name='Without participants', tournament=tournament.id)
+        event = await Event.create(name='Test', tournament=tournament.id)
+        
+        # Create teams
         participants = []
         for i in range(2):
-            team = await Team.create(name='Team {}'.format(i + 1))
+            team = await Team.create(name=f'Team {i + 1}')
             participants.append(team)
 
-        # Many to Many Relationship management is quite straightforward
-        # (there are .remove(...) and .clear() too)
-        await event.participants.add(*participants)
+        # Update event with participants (JSON field)
+        event.participants = [team.id for team in participants]
+        await event.save()
 
-        # Iterate over related entities with the async context manager
-        async for team in event.participants:
-            print(team.name)
+        # Query records
+        all_tournaments = await Tournament.all()
+        for tour in all_tournaments:
+            print(f"Tournament: {tour.name}")
 
-        # The related entities are cached and can be iterated in the synchronous way afterwards
-        for team in event.participants:
-            pass
+        # Filter records
+        active_tournaments = await Tournament.filter(is_active=True)
+        for tour in active_tournaments:
+            print(f"Active tournament: {tour.name}")
 
-        # Use prefetch_related to fetch related objects
-        selected_events = await Event.filter(
-            participants=participants[0].id
-        ).prefetch_related('participants', 'tournament')
-        for event in selected_events:
-            print(event.tournament.name)
-            print([t.name for t in event.participants])
+        # Complex queries
+        events_with_teams = await Event.filter(
+            name__contains="Test"
+        ).order_by('-id').limit(5)
+        
+        for event in events_with_teams:
+            print(f"Event: {event.name}")
 
-        # Prefetch multiple levels of related entities
-        await Team.all().prefetch_related('events__tournament')
-
-        # Filter and order by related models too
-        await Tournament.filter(
-            events__name__in=['Test', 'Prod']
-        ).order_by('-events__participants__name').distinct()
-
-    run_async(main())
+    asyncio.run(main())
 
 .. note::
     Find more examples (including transactions, using multiple databases and more complex querying) in :ref:`examples` and :ref:`query_api`.
+
+Advanced Usage
+=============
+
+Multi-Database Support
+---------------------
+
+OxenORM supports connecting to multiple databases simultaneously:
+
+.. code-block:: python3
+
+    from oxen import MultiDatabaseManager
+
+    async def multi_db_example():
+        manager = MultiDatabaseManager({
+            'primary': 'postgresql://user:pass@localhost/primary',
+            'analytics': 'mysql://user:pass@localhost/analytics',
+            'cache': 'sqlite://:memory:'
+        })
+        
+        # Use different databases for different models
+        await User.objects.using('primary').create(name="User")
+        await AnalyticsEvent.objects.using('analytics').create(event="page_view")
+
+Complex Queries
+--------------
+
+OxenORM supports advanced query features:
+
+.. code-block:: python3
+
+    # Complex filtering
+    users = await User.filter(
+        age__gte=18,
+        email__contains="@gmail.com"
+    ).exclude(
+        is_active=False
+    ).order_by('-created_at').limit(10)
+
+    # Aggregations
+    user_count = await User.count()
+    active_users = await User.filter(is_active=True).count()
+
+    # Bulk operations
+    users_to_create = [
+        User(name=f"User {i}", email=f"user{i}@example.com")
+        for i in range(100)
+    ]
+    created_users = await User.bulk_create(users_to_create)
+
+Transactions
+-----------
+
+OxenORM supports database transactions:
+
+.. code-block:: python3
+
+    from oxen import connect
+
+    async def transaction_example():
+        await connect("sqlite://:memory:")
+        
+        async with connect.transaction() as tx:
+            # All operations in this block are in a transaction
+            user1 = await User.create(name="User 1", email="user1@example.com")
+            user2 = await User.create(name="User 2", email="user2@example.com")
+            
+            # If any operation fails, the entire transaction is rolled back
+            print(f"Created users: {user1.name}, {user2.name}")
+
+CLI Tools
+---------
+
+OxenORM provides comprehensive CLI tools:
+
+.. code-block:: bash
+
+    # Database management
+    oxen db init --url postgresql://user:pass@localhost/mydb
+    oxen db status --url postgresql://user:pass@localhost/mydb
+
+    # Migration management
+    oxen migrate makemigrations --url postgresql://user:pass@localhost/mydb
+    oxen migrate migrate --url postgresql://user:pass@localhost/mydb
+
+    # Performance benchmarking
+    oxen benchmark performance --url postgresql://user:pass@localhost/mydb --iterations 1000
+
+    # Interactive shell
+    oxen shell --url postgresql://user:pass@localhost/mydb --models myapp.models
+
+    # Schema inspection
+    oxen inspect --url postgresql://user:pass@localhost/mydb --output schema.json
+
+Performance Features
+===================
+
+OxenORM includes several performance optimizations:
+
+* **Connection Pooling**: Automatic connection management with health checks
+* **Query Caching**: Intelligent caching with TTL support
+* **Bulk Operations**: Efficient batch operations for large datasets
+* **Async I/O**: Non-blocking database operations
+* **Rust Backend**: High-performance core operations
+
+See :ref:`performance` for detailed performance guides and benchmarks.
+
+Production Configuration
+======================
+
+For production deployments, OxenORM supports comprehensive configuration:
+
+.. code-block:: python3
+
+    from oxen import connect
+    from oxen.config import Config
+
+    # Production configuration
+    config = Config(
+        databases={
+            'default': 'postgresql://user:pass@localhost/prod_db',
+            'read_replica': 'postgresql://user:pass@read-replica/prod_db',
+        },
+        logging={
+            'level': 'INFO',
+            'format': 'json',
+        },
+        performance={
+            'connection_pool_size': 20,
+            'query_cache_ttl': 300,
+        }
+    )
+    
+    await connect(config=config)
+
+See :ref:`config` for detailed configuration options.

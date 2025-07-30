@@ -9,43 +9,56 @@ Models
 Usage
 =====
 
-All models should be derived from ``Model``. To start describing the models, import ``Model`` from ``tortoise.models``.
+All models should be derived from ``Model``. To start describing the models, import ``Model`` from ``oxen.models``.
 
 .. code-block:: python3
 
-    from tortoise.models import Model
+    from oxen import Model
 
 With that start describing the models
 
 .. code-block:: python3
 
+    from oxen import Model
+    from oxen.fields import CharField, IntField, DateTimeField, DecimalField, BooleanField
+
     class Tournament(Model):
-        id = fields.IntField(primary_key=True)
-        name = fields.TextField()
-        created = fields.DatetimeField(auto_now_add=True)
+        id = IntField(primary_key=True)
+        name = CharField(max_length=255)
+        created = DateTimeField(auto_now_add=True)
+        is_active = BooleanField(default=True)
 
         def __str__(self):
             return self.name
+
+        class Meta:
+            table_name = "tournaments"
 
 
     class Event(Model):
-        id = fields.IntField(primary_key=True)
-        name = fields.TextField()
-        tournament = fields.ForeignKeyField('models.Tournament', related_name='events')
-        participants = fields.ManyToManyField('models.Team', related_name='events', through='event_team')
-        modified = fields.DatetimeField(auto_now=True)
-        prize = fields.DecimalField(max_digits=10, decimal_places=2, null=True)
+        id = IntField(primary_key=True)
+        name = CharField(max_length=255)
+        tournament_id = IntField()  # Foreign key reference
+        participants = CharField(max_length=1000)  # JSON field for many-to-many
+        modified = DateTimeField(auto_now=True)
+        prize = DecimalField(max_digits=10, decimal_places=2, null=True)
 
         def __str__(self):
             return self.name
+
+        class Meta:
+            table_name = "events"
 
 
     class Team(Model):
-        id = fields.IntField(primary_key=True)
-        name = fields.TextField()
+        id = IntField(primary_key=True)
+        name = CharField(max_length=255)
 
         def __str__(self):
             return self.name
+
+        class Meta:
+            table_name = "teams"
 
 Let's look at the details of what we accomplished here:
 
@@ -58,9 +71,9 @@ Every model should be derived from ``Model`` or its subclasses. Custom ``Model``
 .. code-block:: python3
 
     class AbstractTournament(Model):
-        id = fields.IntField(primary_key=True)
-        name = fields.TextField()
-        created = fields.DatetimeField(auto_now_add=True)
+        id = IntField(primary_key=True)
+        name = CharField(max_length=255)
+        created = DateTimeField(auto_now_add=True)
 
         class Meta:
             abstract = True
@@ -70,18 +83,29 @@ Every model should be derived from ``Model`` or its subclasses. Custom ``Model``
 
 This model will not affect the schema, but it will be available for inheritance.
 
+Further we have field ``DateTimeField(auto_now=True)``. Options ``auto_now`` and ``auto_now_add`` work like Django's options.
 
-Further we have field ``fields.DatetimeField(auto_now=True)``. Options ``auto_now`` and ``auto_now_add`` work like Django's options.
+Meta Options
+-----------
 
-Use of ``__models__``
----------------------
+OxenORM models support several Meta options:
 
-If you define the variable ``__models__`` in the module which you load your models from, ``generate_schema`` will use that list, rather than automatically finding models for you.
+.. code-block:: python3
+
+    class User(Model):
+        id = IntField(primary_key=True)
+        name = CharField(max_length=100)
+        email = CharField(max_length=255, unique=True)
+
+        class Meta:
+            table_name = "users"  # Custom table name
+            abstract = False       # Whether this is an abstract model
+            ordering = ["name"]    # Default ordering
 
 Primary Keys
 ------------
 
-In Tortoise ORM, every model must have a primary key.
+In OxenORM, every model must have a primary key.
 
 That primary key will be accessible through a reserved field ``pk`` which will be an alias of whichever field has been nominated as a primary key.
 That alias field can be used as a field name when doing filtering e.g. ``.filter(pk=...)`` etc…
@@ -98,357 +122,241 @@ That alias field can be used as a field name when doing filtering e.g. ``.filter
     UUIDField
 
 One must define a primary key by setting the ``primary_key`` parameter to ``True``.
-If you don't define a primary key, the primary key will be generated as an ``IntField`` with name of ``id``.
 
-.. note::
-   If this is used on an Integer Field, ``generated`` will be set to ``True`` unless you explicitly pass ``generated=False`` as well.
+Model Methods
+============
 
-Any of these are valid primary key definitions:
+CRUD Operations
+--------------
+
+OxenORM provides comprehensive CRUD operations:
 
 .. code-block:: python3
 
-    id = fields.IntField(primary_key=True)
+    # Create
+    user = await User.create(name="John Doe", email="john@example.com")
+    
+    # Read
+    user = await User.get(id=1)
+    users = await User.all()
+    active_users = await User.filter(is_active=True)
+    
+    # Update
+    user.name = "Jane Doe"
+    await user.save()
+    
+    # Delete
+    await user.delete()
 
-    checksum = fields.CharField(primary_key=True)
+Bulk Operations
+--------------
 
-    guid = fields.UUIDField(primary_key=True)
+OxenORM supports efficient bulk operations:
 
+.. code-block:: python3
 
-Inheritance
+    # Bulk create
+    users_to_create = [
+        User(name=f"User {i}", email=f"user{i}@example.com")
+        for i in range(100)
+    ]
+    created_users = await User.bulk_create(users_to_create)
+    
+    # Bulk update
+    for user in users:
+        user.is_active = False
+    updated_count = await User.bulk_update(users, ['is_active'])
+    
+    # Bulk delete
+    deleted_count = await User.filter(is_active=False).delete()
+
+Query Methods
+------------
+
+OxenORM provides a rich query API:
+
+.. code-block:: python3
+
+    # Filtering
+    users = await User.filter(age__gte=18, is_active=True)
+    
+    # Excluding
+    users = await User.exclude(is_active=False)
+    
+    # Ordering
+    users = await User.order_by('name', '-created_at')
+    
+    # Limiting and offsetting
+    users = await User.limit(10).offset(20)
+    
+    # Counting
+    user_count = await User.count()
+    active_count = await User.filter(is_active=True).count()
+    
+    # Existence checks
+    has_users = await User.exists()
+    has_john = await User.filter(name__contains="John").exists()
+    
+    # First record
+    first_user = await User.first()
+    first_active = await User.filter(is_active=True).first()
+
+Field Lookups
+============
+
+OxenORM supports Django-style field lookups:
+
+.. code-block:: python3
+
+    # Exact match
+    users = await User.filter(name="John")
+    
+    # Case-insensitive contains
+    users = await User.filter(name__icontains="john")
+    
+    # Starts with
+    users = await User.filter(name__startswith="John")
+    
+    # Ends with
+    users = await User.filter(name__endswith="Doe")
+    
+    # Greater than, less than
+    users = await User.filter(age__gte=18, age__lte=65)
+    
+    # In list
+    users = await User.filter(name__in=["John", "Jane", "Bob"])
+    
+    # Is null
+    users = await User.filter(email__isnull=True)
+    
+    # Is not null
+    users = await User.filter(email__isnull=False)
+
+Complex Queries
+==============
+
+Q Objects
+---------
+
+OxenORM supports complex queries using Q objects:
+
+.. code-block:: python3
+
+    from oxen.queryset import Q
+
+    # OR conditions
+    users = await User.filter(
+        Q(name__contains="John") | Q(email__contains="john")
+    )
+    
+    # AND conditions
+    users = await User.filter(
+        Q(age__gte=18) & Q(is_active=True)
+    )
+    
+    # NOT conditions
+    users = await User.filter(
+        ~Q(is_active=False)
+    )
+
+Aggregations
 -----------
 
-When defining models in Tortoise ORM, you can save a lot of
-repetitive work by leveraging from inheritance.
-
-You can define fields in more generic classes and they are
-automatically available in derived classes. Base classes are
-not limited to Model classes. Any class will work. This way
-you are able to define your models in a natural and easy
-to maintain way.
-
-Let's have a look at some examples.
+OxenORM supports database aggregations:
 
 .. code-block:: python3
 
-    from tortoise import fields
-    from tortoise.models import Model
+    from oxen.queryset import Count, Avg, Max, Min, Sum
 
-    class TimestampMixin():
-        created_at = fields.DatetimeField(null=True, auto_now_add=True)
-        modified_at = fields.DatetimeField(null=True, auto_now=True)
+    # Count
+    user_count = await User.count()
+    
+    # Average age
+    avg_age = await User.aggregate(avg_age=Avg('age'))
+    
+    # Maximum age
+    max_age = await User.aggregate(max_age=Max('age'))
+    
+    # Sum of values
+    total_value = await Order.aggregate(total=Sum('amount'))
 
-    class NameMixin():
-        name = fields.CharField(40, unique=True)
+Transactions
+===========
 
-    class MyAbstractBaseModel(Model):
-        id = fields.IntField(primary_key=True)
-
-        class Meta:
-            abstract = True
-
-    class UserModel(TimestampMixin, MyAbstractBaseModel):
-        # Overriding the id definition
-        # from MyAbstractBaseModel
-        id = fields.UUIDField(primary_key=True)
-
-        # Adding additional fields
-        first_name = fields.CharField(20, null=True)
-
-        class Meta:
-            table = "user"
-
-
-    class RoleModel(TimestampMixin, NameMixin, MyAbstractBaseModel):
-
-        class Meta:
-            table = "role"
-
-Using the ``Meta`` class is not necessary. But it is a good habit, to
-give your table an explicit name. This way you can change the model name
-without breaking the schema. So the following definition is valid.
+OxenORM supports database transactions:
 
 .. code-block:: python3
 
-    class RoleModel(TimestampMixin, NameMixin, MyAbstractBaseModel):
+    from oxen import connect
+
+    async def transfer_money(from_user_id, to_user_id, amount):
+        async with connect.transaction() as tx:
+            # Deduct from source account
+            from_user = await User.get(id=from_user_id)
+            from_user.balance -= amount
+            await from_user.save()
+            
+            # Add to destination account
+            to_user = await User.get(id=to_user_id)
+            to_user.balance += amount
+            await to_user.save()
+
+Multi-Database Support
+=====================
+
+OxenORM supports using multiple databases:
+
+.. code-block:: python3
+
+    from oxen import MultiDatabaseManager
+
+    # Initialize multi-database manager
+    manager = MultiDatabaseManager({
+        'primary': 'postgresql://user:pass@localhost/primary',
+        'analytics': 'mysql://user:pass@localhost/analytics',
+        'cache': 'sqlite://:memory:'
+    })
+    
+    # Use specific database for operations
+    user = await User.objects.using('primary').create(name="User")
+    event = await AnalyticsEvent.objects.using('analytics').create(event="page_view")
+
+Model Validation
+===============
+
+OxenORM supports model validation:
+
+.. code-block:: python3
+
+    from oxen.validators import MinValueValidator, MaxValueValidator
+
+    class User(Model):
+        id = IntField(primary_key=True)
+        name = CharField(max_length=100)
+        age = IntField(validators=[MinValueValidator(0), MaxValueValidator(120)])
+        email = CharField(max_length=255, unique=True)
+
+        def clean(self):
+            # Custom validation
+            if self.age < 18 and self.email.endswith('@adult.com'):
+                raise ValidationError("Age restriction for adult content")
+
+Performance Optimization
+======================
+
+OxenORM provides several performance optimization features:
+
+.. code-block:: python3
+
+    # Select only specific fields
+    users = await User.filter(is_active=True).only('id', 'name')
+    
+    # Use bulk operations for large datasets
+    users = await User.bulk_create(large_user_list)
+    
+    # Use transactions for multiple operations
+    async with connect.transaction() as tx:
+        # Multiple operations in single transaction
         pass
 
-The ``Meta`` class
-------------------
-
-.. autoclass:: tortoise.models.Model.Meta
-
-    .. attribute:: abstract
-        :annotation: = False
-
-        Set to ``True`` to indicate this is an abstract class
-
-    .. attribute:: schema
-        :annotation: = ""
-
-        Set this to configure a schema name, where table exists
-
-    .. attribute:: table
-        :annotation: = ""
-
-        Set this to configure a manual table name, instead of a generated one
-
-    .. attribute:: table_description
-        :annotation: = ""
-
-        Set this to generate a comment message for the table being created for the current model
-
-    .. attribute:: unique_together
-        :annotation: = None
-
-        Specify ``unique_together`` to set up compound unique indexes for sets of columns.
-
-        It should be a tuple of tuples (lists are fine) in the format of:
-
-        .. code-block:: python3
-
-            unique_together=("field_a", "field_b")
-            unique_together=(("field_a", "field_b"), )
-            unique_together=(("field_a", "field_b"), ("field_c", "field_d", "field_e"))
-
-    .. attribute:: indexes
-        :annotation: = None
-
-        Specify ``indexes`` to set up compound non-unique indexes for sets of columns.
-
-        It should be a tuple of tuples (lists are fine) in the format of:
-
-        .. code-block:: python3
-
-            indexes=("field_a", "field_b")
-            indexes=(("field_a", "field_b"), )
-            indexes=(("field_a", "field_b"), ("field_c", "field_d", "field_e"))
-
-    .. attribute:: ordering
-        :annotation: = None
-
-        Specify ``ordering`` to set up default ordering for given model.
-        It should be iterable of strings formatted in same way as ``.order_by(...)`` receives.
-        If query is built with ``GROUP_BY`` clause using ``.annotate(...)`` default ordering is not applied.
-
-        .. code-block:: python3
-
-            ordering = ["name", "-score"]
-
-    .. attribute:: manager
-        :annotation: = tortoise.manager.Manager
-
-        Specify ``manager`` to override the default manager.
-        It should be instance of ``tortoise.manager.Manager`` or subclass.
-
-        .. code-block:: python3
-
-            manager = CustomManager()
-
-``ForeignKeyField``
--------------------
-
-.. code-block:: python3
-
-    tournament = fields.ForeignKeyField('models.Tournament', related_name='events')
-    participants = fields.ManyToManyField('models.Team', related_name='events')
-    modified = fields.DatetimeField(auto_now=True)
-    prize = fields.DecimalField(max_digits=10, decimal_places=2, null=True)
-
-In event model we got some more fields, that could be interesting for us.
-
-``fields.ForeignKeyField('models.Tournament', related_name='events')``
-    Here we create foreign key reference to tournament. We create it by referring to model by it's literal, consisting of app name and model name. ``models`` is default app name, but you can change it in ``class Meta`` with ``app = 'other'``.
-``related_name``
-    Is keyword argument, that defines field for related query on referenced models, so with that you could fetch all tournaments's events with like this:
-
-.. code-block:: python3
-
-    await Tournament.first().prefetch_related("events")
-
-The DB-backing field
-^^^^^^^^^^^^^^^^^^^^
-
-.. note::
-
-    A ``ForeignKeyField`` is a virtual field, meaning it has no direct DB backing.
-    Instead it has a field (by default called :samp:`{FKNAME}_id` (that is, just an ``_id`` is appended)
-    that is the actual DB-backing field.
-
-    It will just contain the Key value of the related table.
-
-    This is an important detail as it would allow one to assign/read the actual value directly,
-    which could be considered an optimization if the entire foreign object isn't needed.
-
-
-Specifying an FK can be done via either passing the object:
-
-.. code-block::  python3
-
-    await SomeModel.create(tournament=the_tournament)
-    # or
-    somemodel.tournament=the_tournament
-
-or by directly accessing the DB-backing field:
-
-.. code-block::  python3
-
-    await SomeModel.create(tournament_id=the_tournament.pk)
-    # or
-    somemodel.tournament_id=the_tournament.pk
-
-
-Querying a relationship is typically done by appending a double underscore, and then the foreign object's field. Then a normal query attr can be appended.
-This can be chained if the next key is also a foreign object:
-
-    :samp:`{FKNAME}__{FOREIGNFIELD}__gt=3`
-
-    or
-
-    :samp:`{FKNAME}__{FOREIGNFK}__{VERYFOREIGNFIELD}__gt=3`
-
-There is however one major limitation. We don't want to restrict foreign column names, or have ambiguity (e.g. a foreign object may have a field called ``isnull``)
-
-Then this would be entirely ambiguous:
-
-    :samp:`{FKNAME}__isnull`
-
-To prevent that we require that direct filters be applied to the DB-backing field of the foreign key:
-
-    :samp:`{FKNAME}_id__isnull`
-
-Fetching the foreign object
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Fetching foreign keys can be done with both async and sync interfaces.
-
-Async fetch:
-
-.. code-block:: python3
-
-    events = await tournament.events.all()
-
-You can async iterate over it like this:
-
-.. code-block:: python3
-
-    async for event in tournament.events:
-        ...
-
-Sync usage requires that you call `fetch_related` before the time, and then you can use common functions such as:
-
-.. code-block:: python3
-
-    await tournament.fetch_related('events')
-    events = list(tournament.events)
-    eventlen = len(tournament.events)
-    if SomeEvent in tournament.events:
-        ...
-    if tournament.events:
-        ...
-    firstevent = tournament.events[0]
-
-
-To get the Reverse-FK, e.g. an `event.tournament` we currently only support the sync interface.
-
-.. code-block:: python3
-
-    await event.fetch_related('tournament')
-    tournament = event.tournament
-
-
-``ManyToManyField``
--------------------
-
-Next field is ``fields.ManyToManyField('models.Team', related_name='events')``. It describes many to many relation to model Team.
-
-To add to a ``ManyToManyField`` both the models need to be saved, else you will get an ``OperationalError`` raised.
-
-Resolving many to many fields can be done with both async and sync interfaces.
-
-Async fetch:
-
-.. code-block:: python3
-
-    participants = await tournament.participants.all()
-
-You can async iterate over it like this:
-
-.. code-block:: python3
-
-    async for participant in tournament.participants:
-        ...
-
-Sync usage requires that you call `fetch_related` before the time, and then you can use common functions such as:
-
-.. code-block:: python3
-
-    await tournament.fetch_related('participants')
-    participants = list(tournament.participants)
-    participantlen = len(tournament.participants)
-    if SomeParticipant in tournament.participants:
-        ...
-    if tournament.participants:
-        ...
-    firstparticipant = tournament.participants[0]
-
-The reverse lookup of ``team.event_team`` works exactly the same way.
-
-Improving relational type hinting
-=================================
-
-Since Tortoise ORM is still a young project, it does not have such widespread support by
-various editors who help you writing code using good autocomplete for models and
-different relations between them.
-However, you can get such autocomplete by doing a little work yourself.
-All you need to do is add a few annotations to your models for fields that are responsible
-for the relations.
-
-Here is an updated example from :ref:`getting_started`, that will add autocomplete for
-all models including fields for the relations between models.
-
-.. code-block:: python3
-
-    from tortoise.models import Model
-    from tortoise import fields
-
-
-    class Tournament(Model):
-        id = fields.IntField(primary_key=True)
-        name = fields.CharField(max_length=255)
-
-        events: fields.ReverseRelation["Event"]
-
-        def __str__(self):
-            return self.name
-
-
-    class Event(Model):
-        id = fields.IntField(primary_key=True)
-        name = fields.CharField(max_length=255)
-        tournament: fields.ForeignKeyRelation[Tournament] = fields.ForeignKeyField(
-            "models.Tournament", related_name="events"
-        )
-        participants: fields.ManyToManyRelation["Team"] = fields.ManyToManyField(
-            "models.Team", related_name="events", through="event_team"
-        )
-
-        def __str__(self):
-            return self.name
-
-
-    class Team(Model):
-        id = fields.IntField(primary_key=True)
-        name = fields.CharField(max_length=255)
-
-        events: fields.ManyToManyRelation[Event]
-
-        def __str__(self):
-            return self.name
-
-
-Reference
-=========
-
-.. automodule:: tortoise.models
-    :members: Model
-    :undoc-members:
+See :ref:`performance` for detailed performance optimization guides.

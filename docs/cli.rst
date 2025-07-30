@@ -1,432 +1,551 @@
-OxenORM CLI Tool
-================
+.. _cli:
 
-The OxenORM CLI tool provides a command-line interface for managing database migrations and other OxenORM operations.
+======
+CLI
+======
+
+OxenORM provides a comprehensive command-line interface for database management, migrations, and development tasks.
 
 Installation
------------
+===========
 
-The CLI tool is included with OxenORM and can be installed via pip:
+The CLI is automatically installed with OxenORM:
 
 .. code-block:: bash
 
     pip install oxen-orm
 
-Or install from source:
+Basic Usage
+==========
+
+The CLI is accessed via the ``oxen`` command:
 
 .. code-block:: bash
 
-    git clone https://github.com/Diman2003/OxenORM.git
-    cd OxenORM
-    pip install -e .
+    oxen --help
+    oxen <command> --help
 
-Usage
------
+Database Management
+==================
 
-Basic usage:
+Initialize Database
+-----------------
+
+Initialize a new database connection and create tables:
 
 .. code-block:: bash
 
-    oxen [OPTIONS] COMMAND [ARGS]...
+    # Initialize with connection string
+    oxen db init --url postgresql://user:pass@localhost/mydb
+    
+    # Initialize with config file
+    oxen db init --config config.yaml
+    
+    # Initialize with environment variables
+    oxen db init --env-file .env
+
+Database Status
+--------------
+
+Check the status of your database connection:
+
+.. code-block:: bash
+
+    # Check connection status
+    oxen db status --url postgresql://user:pass@localhost/mydb
+    
+    # Check with detailed information
+    oxen db status --url postgresql://user:pass@localhost/mydb --verbose
+    
+    # Check multiple databases
+    oxen db status --config multi_db_config.yaml
+
+Schema Management
+================
+
+Create Tables
+------------
+
+Create tables for your models:
+
+.. code-block:: bash
+
+    # Create all tables
+    oxen schema create --url postgresql://user:pass@localhost/mydb
+    
+    # Create specific tables
+    oxen schema create --url postgresql://user:pass@localhost/mydb --models User,Post
+    
+    # Create with custom schema
+    oxen schema create --url postgresql://user:pass@localhost/mydb --schema public
+
+Drop Tables
+-----------
+
+Drop tables from the database:
+
+.. code-block:: bash
+
+    # Drop all tables
+    oxen schema drop --url postgresql://user:pass@localhost/mydb
+    
+    # Drop specific tables
+    oxen schema drop --url postgresql://user:pass@localhost/mydb --models User,Post
+    
+    # Drop with confirmation
+    oxen schema drop --url postgresql://user:pass@localhost/mydb --confirm
+
+Schema Inspection
+----------------
+
+Inspect the current database schema:
+
+.. code-block:: bash
+
+    # Show all tables
+    oxen schema inspect --url postgresql://user:pass@localhost/mydb
+    
+    # Show specific table
+    oxen schema inspect --url postgresql://user:pass@localhost/mydb --table users
+    
+    # Export schema to file
+    oxen schema inspect --url postgresql://user:pass@localhost/mydb --output schema.json
+    
+    # Show with details
+    oxen schema inspect --url postgresql://user:pass@localhost/mydb --verbose
+
+Migration Management
+===================
+
+Create Migrations
+----------------
+
+Generate migration files for schema changes:
+
+.. code-block:: bash
+
+    # Create migration for all changes
+    oxen migrate makemigrations --url postgresql://user:pass@localhost/mydb
+    
+    # Create migration for specific models
+    oxen migrate makemigrations --url postgresql://user:pass@localhost/mydb --models User,Post
+    
+    # Create migration with custom name
+    oxen migrate makemigrations --url postgresql://user:pass@localhost/mydb --name add_user_fields
+    
+    # Create migration with custom path
+    oxen migrate makemigrations --url postgresql://user:pass@localhost/mydb --migrations-dir ./migrations
+
+Apply Migrations
+---------------
+
+Apply pending migrations to the database:
+
+.. code-block:: bash
+
+    # Apply all pending migrations
+    oxen migrate migrate --url postgresql://user:pass@localhost/mydb
+    
+    # Apply specific migration
+    oxen migrate migrate --url postgresql://user:pass@localhost/mydb --migration 0001_initial
+    
+    # Apply with fake flag (for testing)
+    oxen migrate migrate --url postgresql://user:pass@localhost/mydb --fake
+    
+    # Apply with dry-run
+    oxen migrate migrate --url postgresql://user:pass@localhost/mydb --dry-run
+
+Migration Status
+---------------
+
+Check the status of migrations:
+
+.. code-block:: bash
+
+    # Show migration status
+    oxen migrate show --url postgresql://user:pass@localhost/mydb
+    
+    # Show with details
+    oxen migrate show --url postgresql://user:pass@localhost/mydb --verbose
+    
+    # Show specific migration
+    oxen migrate show --url postgresql://user:pass@localhost/mydb --migration 0001_initial
+
+Rollback Migrations
+-------------------
+
+Rollback applied migrations:
+
+.. code-block:: bash
+
+    # Rollback last migration
+    oxen migrate rollback --url postgresql://user:pass@localhost/mydb
+    
+    # Rollback specific number of migrations
+    oxen migrate rollback --url postgresql://user:pass@localhost/mydb --steps 3
+    
+    # Rollback to specific migration
+    oxen migrate rollback --url postgresql://user:pass@localhost/mydb --to 0001_initial
+
+Performance Tools
+================
+
+Performance Benchmarking
+-----------------------
+
+Run performance benchmarks on your database:
+
+.. code-block:: bash
+
+    # Run basic performance test
+    oxen benchmark performance --url postgresql://user:pass@localhost/mydb
+    
+    # Run with custom iterations
+    oxen benchmark performance --url postgresql://user:pass@localhost/mydb --iterations 1000
+    
+    # Run specific benchmarks
+    oxen benchmark performance --url postgresql://user:pass@localhost/mydb --benchmarks crud,query,bulk
+    
+    # Run with custom data size
+    oxen benchmark performance --url postgresql://user:pass@localhost/mydb --data-size 10000
+    
+    # Export results to file
+    oxen benchmark performance --url postgresql://user:pass@localhost/mydb --output results.json
+
+Performance Monitoring
+---------------------
+
+Monitor database performance in real-time:
+
+.. code-block:: bash
+
+    # Start performance monitoring
+    oxen monitor start --url postgresql://user:pass@localhost/mydb
+    
+    # Monitor with custom interval
+    oxen monitor start --url postgresql://user:pass@localhost/mydb --interval 5
+    
+    # Monitor specific metrics
+    oxen monitor start --url postgresql://user:pass@localhost/mydb --metrics queries,connections,performance
+    
+    # Export monitoring data
+    oxen monitor start --url postgresql://user:pass@localhost/mydb --output monitoring.log
+
+Development Tools
+================
+
+Interactive Shell
+----------------
+
+Start an interactive Python shell with OxenORM:
+
+.. code-block:: bash
+
+    # Start interactive shell
+    oxen shell --url postgresql://user:pass@localhost/mydb
+    
+    # Start with specific models
+    oxen shell --url postgresql://user:pass@localhost/mydb --models User,Post
+    
+    # Start with custom Python path
+    oxen shell --url postgresql://user:pass@localhost/mydb --python-path ./myapp
+    
+    # Start with custom environment
+    oxen shell --url postgresql://user:pass@localhost/mydb --env-file .env
+
+Code Generation
+--------------
+
+Generate code templates and boilerplate:
+
+.. code-block:: bash
+
+    # Generate model template
+    oxen generate model User --fields name:CharField,email:CharField,age:IntField
+    
+    # Generate migration template
+    oxen generate migration add_user_fields --models User
+    
+    # Generate API template
+    oxen generate api User --methods create,read,update,delete
+    
+    # Generate test template
+    oxen generate test User --coverage
+
+Data Management
+==============
+
+Data Import
+-----------
+
+Import data from various sources:
+
+.. code-block:: bash
+
+    # Import from CSV
+    oxen data import --url postgresql://user:pass@localhost/mydb --file users.csv --model User
+    
+    # Import from JSON
+    oxen data import --url postgresql://user:pass@localhost/mydb --file users.json --model User
+    
+    # Import with custom mapping
+    oxen data import --url postgresql://user:pass@localhost/mydb --file users.csv --model User --mapping name:full_name,email:email_address
+    
+    # Import with validation
+    oxen data import --url postgresql://user:pass@localhost/mydb --file users.csv --model User --validate
+
+Data Export
+-----------
+
+Export data to various formats:
+
+.. code-block:: bash
+
+    # Export to CSV
+    oxen data export --url postgresql://user:pass@localhost/mydb --model User --output users.csv
+    
+    # Export to JSON
+    oxen data export --url postgresql://user:pass@localhost/mydb --model User --output users.json
+    
+    # Export with filters
+    oxen data export --url postgresql://user:pass@localhost/mydb --model User --filter "is_active=True" --output active_users.csv
+    
+    # Export with custom fields
+    oxen data export --url postgresql://user:pass@localhost/mydb --model User --fields name,email --output user_names.csv
+
+Configuration
+============
+
+Configuration Files
+------------------
+
+OxenORM CLI supports configuration files:
+
+.. code-block:: yaml
+
+    # config.yaml
+    databases:
+      default:
+        url: postgresql://user:pass@localhost/mydb
+        pool_size: 10
+        max_overflow: 20
+      analytics:
+        url: mysql://user:pass@localhost/analytics
+        pool_size: 5
+    
+    logging:
+      level: INFO
+      format: json
+      file: oxenorm.log
+    
+    performance:
+      query_cache_ttl: 300
+      connection_pool_health_check: true
+
+Using configuration files:
+
+.. code-block:: bash
+
+    # Use config file
+    oxen db init --config config.yaml
+    
+    # Use specific database from config
+    oxen db status --config config.yaml --database analytics
+
+Environment Variables
+--------------------
+
+OxenORM CLI supports environment variables:
+
+.. code-block:: bash
+
+    # Set database URL
+    export OXENORM_DATABASE_URL="postgresql://user:pass@localhost/mydb"
+    
+    # Set log level
+    export OXENORM_LOG_LEVEL="DEBUG"
+    
+    # Use environment variables
+    oxen db init
+    oxen db status
+
+Command Options
+==============
 
 Global Options
 -------------
 
-- ``--database-url, -d``: Database connection URL (e.g., postgresql://user:pass@localhost/db)
-- ``--migrations-dir, -m``: Directory for migration files (default: migrations)
-- ``--verbose, -v``: Enable verbose output
-
-You can also set the database URL using the ``OXEN_DATABASE_URL`` environment variable:
+All commands support these global options:
 
 .. code-block:: bash
 
-    export OXEN_DATABASE_URL="postgresql://user:pass@localhost/db"
-    oxen migrate status
+    --help, -h          Show help message
+    --version, -v       Show version information
+    --verbose, -V       Enable verbose output
+    --quiet, -q         Suppress output
+    --config, -c        Configuration file path
+    --env-file, -e      Environment file path
 
-Migration Commands
------------------
+Database Options
+---------------
 
-The CLI provides comprehensive migration management through the ``migrate`` subcommand.
-
-Status
-~~~~~~
-
-Check the current migration status:
-
-.. code-block:: bash
-
-    oxen migrate status
-
-Options:
-- ``--format``: Output format (table, json, simple) - default: table
-
-Examples:
+Database-related commands support:
 
 .. code-block:: bash
 
-    # Default table format
-    oxen migrate status
+    --url, -u           Database connection URL
+    --database, -d      Database name (for multi-database configs)
+    --timeout, -t       Connection timeout in seconds
+    --pool-size, -p     Connection pool size
+    --ssl-mode          SSL mode (disable, allow, prefer, require)
 
-    # JSON format for scripting
-    oxen migrate status --format json
-
-    # Simple format for quick overview
-    oxen migrate status --format simple
-
-Create
-~~~~~~
-
-Create a new migration:
-
-.. code-block:: bash
-
-    oxen migrate create "Description" [OPTIONS]
-
-Options:
-- ``--author``: Migration author
-- ``--up-sql``: Up migration SQL (or use --file)
-- ``--down-sql``: Down migration SQL (or use --file)
-- ``--file``: SQL file containing up and down migrations
-
-Examples:
-
-.. code-block:: bash
-
-    # Create migration with inline SQL
-    oxen migrate create "Add users table" \
-        --up-sql "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(100));" \
-        --down-sql "DROP TABLE users;" \
-        --author "john.doe"
-
-    # Create migration from SQL file
-    oxen migrate create "Add posts table" --file migration.sql --author "jane.smith"
-
-SQL File Format
-^^^^^^^^^^^^^^
-
-When using the ``--file`` option, the SQL file should contain up and down migrations separated by markers:
-
-.. code-block:: sql
-
-    -- UP
-    CREATE TABLE posts (
-        id SERIAL PRIMARY KEY,
-        title VARCHAR(200) NOT NULL,
-        content TEXT,
-        user_id INTEGER REFERENCES users(id),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    -- DOWN
-    DROP TABLE posts;
-
-Run
-~~~
-
-Run pending migrations:
-
-.. code-block:: bash
-
-    oxen migrate run [OPTIONS]
-
-Options:
-- ``--target``: Target migration version (default: run all pending)
-- ``--dry-run``: Show what would be run without executing
-
-Examples:
-
-.. code-block:: bash
-
-    # Run all pending migrations
-    oxen migrate run
-
-    # Run migrations up to a specific version
-    oxen migrate run --target 20231201120000
-
-    # Dry run to see what would be executed
-    oxen migrate run --dry-run
-
-Rollback
-~~~~~~~~
-
-Rollback migrations to a previous version:
-
-.. code-block:: bash
-
-    oxen migrate rollback TARGET_VERSION [OPTIONS]
-
-Options:
-- ``--dry-run``: Show what would be rolled back without executing
-
-Examples:
-
-.. code-block:: bash
-
-    # Rollback to a specific version
-    oxen migrate rollback 20231201120000
-
-    # Dry run to see what would be rolled back
-    oxen migrate rollback 20231201120000 --dry-run
-
-History
-~~~~~~~
-
-Show migration history:
-
-.. code-block:: bash
-
-    oxen migrate history [OPTIONS]
-
-Options:
-- ``--limit``: Number of recent migrations to show (default: 10)
-- ``--format``: Output format (table, json, simple) - default: table
-
-Examples:
-
-.. code-block:: bash
-
-    # Show last 10 migrations
-    oxen migrate history
-
-    # Show last 5 migrations in JSON format
-    oxen migrate history --limit 5 --format json
-
-    # Show all migrations in simple format
-    oxen migrate history --limit 0 --format simple
-
-Validate
-~~~~~~~~
-
-Validate migration files:
-
-.. code-block:: bash
-
-    oxen migrate validate [OPTIONS]
-
-Options:
-- ``--migration``: Specific migration to validate (default: validate all)
-
-Examples:
-
-.. code-block:: bash
-
-    # Validate all migrations
-    oxen migrate validate
-
-    # Validate a specific migration
-    oxen migrate validate --migration 20231201120000
-
-Output Formats
+Output Options
 -------------
 
-The CLI supports three output formats for status and history commands:
+Commands that produce output support:
 
-Table Format (Default)
-~~~~~~~~~~~~~~~~~~~~~~
+.. code-block:: bash
 
-Human-readable table format:
-
-.. code-block:: text
-
-    Metric              | Value
-    --------------------|------------------
-    Applied Migrations  | 3
-    Pending Migrations  | 2
-    Current Version     | 20231201120000
-    Latest Version      | 20231201130000
-
-    📋 Applied Migrations (3):
-      ✅ 20231201120000
-      ✅ 20231201120001
-      ✅ 20231201120002
-
-    ⏳ Pending Migrations (2):
-      ⏸️  20231201130000
-      ⏸️  20231201130001
-
-JSON Format
-~~~~~~~~~~~
-
-Machine-readable JSON format for scripting:
-
-.. code-block:: json
-
-    {
-      "applied_count": 3,
-      "pending_count": 2,
-      "current_version": "20231201120000",
-      "latest_version": "20231201130000",
-      "applied_migrations": [
-        "20231201120000",
-        "20231201120001",
-        "20231201120002"
-      ],
-      "pending_migrations": [
-        "20231201130000",
-        "20231201130001"
-      ]
-    }
-
-Simple Format
-~~~~~~~~~~~~
-
-Simple key-value pairs:
-
-.. code-block:: text
-
-    applied_count: 3
-    pending_count: 2
-    current_version: 20231201120000
-    latest_version: 20231201130000
-
-Error Handling
--------------
-
-The CLI provides clear error messages and validation:
-
-- **Missing Database URL**: Prompts to use ``--database-url`` or set ``OXEN_DATABASE_URL``
-- **Invalid Database URL**: Shows connection error details
-- **Missing Subcommands**: Provides help for available commands
-- **Migration Validation**: Checks SQL syntax and dependencies
-- **Dry Run Mode**: Shows what would happen without making changes
+    --output, -o        Output file path
+    --format, -f        Output format (json, csv, table, yaml)
+    --pretty, -P        Pretty-print output
+    --no-color          Disable colored output
 
 Examples
---------
+========
 
 Complete Workflow
-~~~~~~~~~~~~~~~~
+----------------
 
-Here's a complete example of using the CLI for a typical migration workflow:
-
-.. code-block:: bash
-
-    # 1. Check current status
-    oxen migrate status
-
-    # 2. Create a new migration
-    oxen migrate create "Add user profiles" \
-        --up-sql "CREATE TABLE profiles (id SERIAL PRIMARY KEY, user_id INTEGER REFERENCES users(id), bio TEXT);" \
-        --down-sql "DROP TABLE profiles;" \
-        --author "alice"
-
-    # 3. Validate the migration
-    oxen migrate validate
-
-    # 4. Dry run to see what will happen
-    oxen migrate run --dry-run
-
-    # 5. Run the migration
-    oxen migrate run
-
-    # 6. Check status again
-    oxen migrate status
-
-    # 7. View history
-    oxen migrate history --limit 5
-
-Rollback Workflow
-~~~~~~~~~~~~~~~~
-
-Example of rolling back migrations:
+Here's a complete workflow example:
 
 .. code-block:: bash
 
-    # 1. Check current status
-    oxen migrate status
+    # 1. Initialize database
+    oxen db init --url postgresql://user:pass@localhost/mydb
+    
+    # 2. Create initial migration
+    oxen migrate makemigrations --url postgresql://user:pass@localhost/mydb --name initial
+    
+    # 3. Apply migration
+    oxen migrate migrate --url postgresql://user:pass@localhost/mydb
+    
+    # 4. Import initial data
+    oxen data import --url postgresql://user:pass@localhost/mydb --file users.csv --model User
+    
+    # 5. Run performance test
+    oxen benchmark performance --url postgresql://user:pass@localhost/mydb --iterations 1000
+    
+    # 6. Start monitoring
+    oxen monitor start --url postgresql://user:pass@localhost/mydb --interval 10
 
-    # 2. See what would be rolled back
-    oxen migrate rollback 20231201120000 --dry-run
+Development Workflow
+-------------------
 
-    # 3. Perform the rollback
-    oxen migrate rollback 20231201120000
-
-    # 4. Verify the rollback
-    oxen migrate status
-
-Scripting
----------
-
-The CLI is designed to be scriptable. Here are some examples:
-
-Check Migration Status in Script
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Development workflow with OxenORM CLI:
 
 .. code-block:: bash
 
-    #!/bin/bash
-    STATUS=$(oxen migrate status --format json)
-    APPLIED_COUNT=$(echo "$STATUS" | jq -r '.applied_count')
+    # 1. Start development shell
+    oxen shell --url postgresql://user:pass@localhost/mydb --models User,Post
     
-    if [ "$APPLIED_COUNT" -gt 0 ]; then
-        echo "Database has $APPLIED_COUNT applied migrations"
-    else
-        echo "Database has no applied migrations"
-    fi
+    # 2. Make model changes in Python shell
+    # ... make changes ...
+    
+    # 3. Generate migration for changes
+    oxen migrate makemigrations --url postgresql://user:pass@localhost/mydb --name add_user_fields
+    
+    # 4. Apply migration
+    oxen migrate migrate --url postgresql://user:pass@localhost/mydb
+    
+    # 5. Test performance
+    oxen benchmark performance --url postgresql://user:pass@localhost/mydb --benchmarks crud
+    
+    # 6. Export test data
+    oxen data export --url postgresql://user:pass@localhost/mydb --model User --output test_users.csv
 
-Automated Migration Runner
-~~~~~~~~~~~~~~~~~~~~~~~~~
+Production Deployment
+--------------------
+
+Production deployment workflow:
 
 .. code-block:: bash
 
-    #!/bin/bash
-    set -e
+    # 1. Check database status
+    oxen db status --url postgresql://user:pass@localhost/prod_db --verbose
     
-    echo "Running migrations..."
+    # 2. Apply migrations
+    oxen migrate migrate --url postgresql://user:pass@localhost/prod_db
     
-    # Check if there are pending migrations
-    STATUS=$(oxen migrate status --format json)
-    PENDING_COUNT=$(echo "$STATUS" | jq -r '.pending_count')
+    # 3. Import production data
+    oxen data import --url postgresql://user:pass@localhost/prod_db --file prod_data.csv --model User --validate
     
-    if [ "$PENDING_COUNT" -gt 0 ]; then
-        echo "Found $PENDING_COUNT pending migrations"
-        
-        # Run migrations
-        oxen migrate run
-        
-        echo "Migrations completed successfully"
-    else
-        echo "No pending migrations"
-    fi
+    # 4. Start monitoring
+    oxen monitor start --url postgresql://user:pass@localhost/prod_db --interval 30 --output prod_monitoring.log
+    
+    # 5. Run performance benchmarks
+    oxen benchmark performance --url postgresql://user:pass@localhost/prod_db --iterations 5000 --output prod_benchmarks.json
 
 Troubleshooting
---------------
+==============
 
 Common Issues
-~~~~~~~~~~~~
+------------
 
-**"Rust engine not available"**
-    Build the Rust extension first: ``maturin develop``
-
-**"Database URL is required"**
-    Set the database URL: ``--database-url postgresql://user:pass@localhost/db``
-
-**"Failed to connect to database"**
-    Check your database connection string and ensure the database is running
-
-**"Migration plan is invalid"**
-    Check for dependency conflicts or invalid SQL in your migrations
-
-**"Permission denied"**
-    Ensure your database user has the necessary permissions
-
-Debug Mode
-~~~~~~~~~~
-
-Use the ``--verbose`` flag for detailed error information:
+**Connection Issues:**
 
 .. code-block:: bash
 
-    oxen --verbose migrate status
+    # Test connection
+    oxen db status --url postgresql://user:pass@localhost/mydb --verbose
+    
+    # Check SSL settings
+    oxen db status --url postgresql://user:pass@localhost/mydb --ssl-mode require
+    
+    # Check timeout settings
+    oxen db status --url postgresql://user:pass@localhost/mydb --timeout 30
 
-Environment Variables
-~~~~~~~~~~~~~~~~~~~~
+**Migration Issues:**
 
-- ``OXEN_DATABASE_URL``: Default database connection URL
-- ``OXEN_MIGRATIONS_DIR``: Default migrations directory
+.. code-block:: bash
 
-Integration
+    # Check migration status
+    oxen migrate show --url postgresql://user:pass@localhost/mydb --verbose
+    
+    # Rollback problematic migration
+    oxen migrate rollback --url postgresql://user:pass@localhost/mydb --steps 1
+    
+    # Fake migration (mark as applied without running)
+    oxen migrate migrate --url postgresql://user:pass@localhost/mydb --fake
+
+**Performance Issues:**
+
+.. code-block:: bash
+
+    # Run detailed performance test
+    oxen benchmark performance --url postgresql://user:pass@localhost/mydb --iterations 10000 --verbose
+    
+    # Monitor in real-time
+    oxen monitor start --url postgresql://user:pass@localhost/mydb --interval 5 --metrics all
+    
+    # Check connection pool
+    oxen db status --url postgresql://user:pass@localhost/mydb --verbose
+
+Debug Mode
 ----------
 
-The CLI integrates seamlessly with the OxenORM Python API. You can use the CLI for day-to-day operations and the Python API for programmatic access.
+Enable debug mode for troubleshooting:
 
-For more information about the Python API, see the :doc:`getting_started` guide.
+.. code-block:: bash
+
+    # Enable debug logging
+    export OXENORM_LOG_LEVEL="DEBUG"
+    oxen db status --url postgresql://user:pass@localhost/mydb --verbose
+    
+    # Enable SQL logging
+    export OXENORM_LOG_SQL="true"
+    oxen migrate migrate --url postgresql://user:pass@localhost/mydb --verbose
+    
+    # Enable performance logging
+    export OXENORM_LOG_PERFORMANCE="true"
+    oxen benchmark performance --url postgresql://user:pass@localhost/mydb --verbose
