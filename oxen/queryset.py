@@ -436,13 +436,9 @@ class QuerySet(AwaitableQuery[MODEL]):
         """Update matching records."""
         return UpdateQuery(
             model=self.model,
-            update_kwargs=kwargs,
             db=self._db,
             q_objects=self._q_objects,
-            annotations=self._annotations,
-            custom_filters=self._custom_filters,
-            limit=self._limit,
-            orderings=self._orderings,
+            update_data=kwargs
         )
 
     def count(self) -> 'CountQuery':
@@ -462,11 +458,7 @@ class QuerySet(AwaitableQuery[MODEL]):
         return ExistsQuery(
             model=self.model,
             db=self._db,
-            q_objects=self._q_objects,
-            annotations=self._annotations,
-            custom_filters=self._custom_filters,
-            force_indexes=self._force_indexes,
-            use_indexes=self._use_indexes,
+            q_objects=self._q_objects
         )
 
     def all(self) -> 'QuerySet[MODEL]':
@@ -762,7 +754,128 @@ class QuerySet(AwaitableQuery[MODEL]):
 # Placeholder classes for other query types
 class UpdateQuery(AwaitableQuery):
     """Query for updating records."""
-    pass
+    
+    def __init__(self, model: type[MODEL], db: Any = None, q_objects: list[Q] = None, update_data: dict[str, Any] = None):
+        super().__init__(model)
+        self._db = db
+        self._q_objects = q_objects or []
+        self._update_data = update_data or {}
+    
+    def __await__(self) -> Generator[Any, None, int]:
+        """Make the update query awaitable."""
+        async def _self() -> int:
+            return await self._execute()
+        return _self().__await__()
+    
+    async def _execute(self) -> int:
+        """Execute the update query and return number of rows affected."""
+        # Get database connection
+        db = self._choose_db()
+        if not db:
+            raise OperationalError("No database connection available")
+        
+        # Build conditions from filters with proper field lookup handling
+        conditions = {}
+        for q_obj in self._q_objects:
+            # Handle Q objects properly
+            if hasattr(q_obj, 'filters'):
+                # Process each filter with field lookup support
+                for key, value in q_obj.filters.items():
+                    if '__' in key:
+                        field_name, lookup = key.split('__', 1)
+                        if lookup == 'lt':
+                            conditions[field_name] = f"< {value}"
+                        elif lookup == 'lte':
+                            conditions[field_name] = f"<= {value}"
+                        elif lookup == 'gt':
+                            conditions[field_name] = f"> {value}"
+                        elif lookup == 'gte':
+                            conditions[field_name] = f">= {value}"
+                        elif lookup == 'in':
+                            conditions[field_name] = value
+                        else:
+                            # Unknown lookup, treat as exact match
+                            conditions[field_name] = value
+                    else:
+                        conditions[key] = value
+            elif hasattr(q_obj, 'children'):
+                for child in q_obj.children:
+                    if hasattr(child, 'filters'):
+                        for key, value in child.filters.items():
+                            if '__' in key:
+                                field_name, lookup = key.split('__', 1)
+                                if lookup == 'lt':
+                                    conditions[field_name] = f"< {value}"
+                                elif lookup == 'lte':
+                                    conditions[field_name] = f"<= {value}"
+                                elif lookup == 'gt':
+                                    conditions[field_name] = f"> {value}"
+                                elif lookup == 'gte':
+                                    conditions[field_name] = f">= {value}"
+                                elif lookup == 'in':
+                                    conditions[field_name] = value
+                                else:
+                                    conditions[field_name] = value
+                            else:
+                                conditions[key] = value
+                    elif isinstance(child, dict):
+                        conditions.update(child)
+            elif isinstance(q_obj, dict):
+                conditions.update(q_obj)
+            else:
+                try:
+                    conditions.update(dict(q_obj))
+                except:
+                    pass
+        
+        # Generate SQL manually for complex conditions
+        quoted_table = db._quote_identifier(self.model._meta.table_name)
+        
+        # Build SET clause
+        set_clauses = []
+        params = []
+        for key, value in self._update_data.items():
+            quoted_key = db._quote_identifier(key)
+            set_clauses.append(f"{quoted_key} = ?")
+            
+            # Convert Decimal to float for SQLite compatibility
+            if hasattr(value, 'as_tuple'):  # Decimal
+                params.append(float(value))
+            else:
+                params.append(value)
+        
+        sql = f"UPDATE {quoted_table} SET {', '.join(set_clauses)}"
+        
+        # Build WHERE clause if conditions exist
+        if conditions:
+            where_clauses = []
+            for key, value in conditions.items():
+                quoted_key = db._quote_identifier(key)
+                if isinstance(value, str) and value.startswith(('<', '<=', '>', '>=')):
+                    # Handle comparison operators
+                    operator, val = value.split(' ', 1)
+                    where_clauses.append(f"{quoted_key} {operator} ?")
+                    params.append(val)
+                elif isinstance(value, (list, tuple)):
+                    # Handle IN clause
+                    placeholders = ', '.join(['?' for _ in value])
+                    where_clauses.append(f"{quoted_key} IN ({placeholders})")
+                    params.extend(value)
+                else:
+                    # Handle exact match
+                    where_clauses.append(f"{quoted_key} = ?")
+                    params.append(value)
+            
+            if where_clauses:
+                sql += f" WHERE {' AND '.join(where_clauses)}"
+        
+        # Execute the update query
+        result = await db.execute_query(sql, params)
+        
+        if result.get('error') is None:
+            return result.get('rows_affected', 0)
+        else:
+            raise OperationalError(f"Failed to execute update query: {result.get('error', 'Unknown error')}")
 
 class DeleteQuery(AwaitableQuery):
     """Query for deleting records."""
@@ -872,6 +985,11 @@ class DeleteQuery(AwaitableQuery):
 class ExistsQuery(AwaitableQuery):
     """Query for checking existence."""
     
+    def __init__(self, model: type[MODEL], db: Any = None, q_objects: list[Q] = None):
+        super().__init__(model)
+        self._db = db
+        self._q_objects = q_objects or []
+    
     def __await__(self) -> Generator[Any, None, bool]:
         """Make the exists query awaitable."""
         async def _self() -> bool:
@@ -881,8 +999,7 @@ class ExistsQuery(AwaitableQuery):
     async def _execute(self) -> bool:
         """Execute the exists query and return True if any records exist."""
         # Use count query with limit 1 for efficiency
-        count_query = CountQuery(self.model, self._db)
-        count_query._q_objects = self._q_objects
+        count_query = CountQuery(self.model, self._db, self._q_objects)
         count_query._limit = 1
         
         count = await count_query._execute()

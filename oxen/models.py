@@ -673,12 +673,13 @@ class Model(metaclass=ModelMeta):
         
         # Check if bulk insert was successful (no error)
         if result.get('error') is None:
-            # For SQLite, we need to get the IDs manually since they're not returned
-            # We'll mark the objects as saved but without specific IDs
-            for obj in objects:
+            # Set primary keys for the created objects
+            last_id = result.get('last_id', 0)
+            for i, obj in enumerate(objects):
                 obj._saved_in_db = True
-                # Note: In a real implementation, you might want to fetch the IDs
-                # by querying the database, but for now we'll leave them as None
+                # Set the primary key (assuming auto-incrementing ID)
+                if last_id > 0:
+                    obj.pk = last_id - len(objects) + 1 + i
             return objects
         else:
             raise OperationalError(f"Failed to bulk create records: {result.get('error', 'Unknown error')}")
@@ -762,9 +763,21 @@ class Model(metaclass=ModelMeta):
 
     async def update(self, **kwargs: Any) -> None:
         """Update the model instance with new values."""
+        meta = self._meta
+        
         for key, value in kwargs.items():
-            if hasattr(self, key):
+            if key in meta.fields_map:
+                # Validate and convert the value using field's to_python_value
+                field_object = meta.fields_map[key]
+                if value is None and not field_object.null:
+                    raise ValueError(f"{key} is non nullable field, but null was passed")
+                setattr(self, key, field_object.to_python_value(value))
+            elif hasattr(self, key):
+                # For non-field attributes, set directly
                 setattr(self, key, value)
+            else:
+                raise FieldError(f"Field '{key}' does not exist on {self.__class__.__name__}")
+        
         await self.save(force_update=True)
 
     def __await__(self: MODEL) -> Generator[Any, None, MODEL]:

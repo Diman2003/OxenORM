@@ -106,23 +106,131 @@ class MigrationGenerator:
         sql_parts = []
         
         for model in models:
-            table_name = getattr(model, '__tablename__', model.__name__.lower())
+            table_name = getattr(model, '_meta', {}).table_name or model.__name__.lower()
             sql_parts.append(f"-- Create table: {table_name}")
+            
+            # Get model fields
+            fields = []
+            if hasattr(model, '_meta') and hasattr(model._meta, 'fields_map'):
+                for field_name, field_obj in model._meta.fields_map.items():
+                    if field_name != 'id':  # Skip the default ID field
+                        field_sql = self._generate_field_sql(field_name, field_obj)
+                        if field_sql:
+                            fields.append(field_sql)
+            
+            # Add default ID field if not present
+            if not any('id' in field.lower() for field in fields):
+                fields.insert(0, "id INTEGER PRIMARY KEY AUTOINCREMENT")
+            else:
+                # Ensure the ID field has proper constraints
+                id_field_index = next((i for i, field in enumerate(fields) if 'id' in field.lower()), None)
+                if id_field_index is not None:
+                    # Replace the ID field with proper constraints
+                    fields[id_field_index] = "id INTEGER PRIMARY KEY AUTOINCREMENT"
+            
+            # Add timestamp fields (only if not already present)
+            if not any('created_at' in field.lower() for field in fields):
+                fields.append("created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+            if not any('updated_at' in field.lower() for field in fields):
+                fields.append("updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+            
             sql_parts.append(f"CREATE TABLE {table_name} (")
-            sql_parts.append("    id SERIAL PRIMARY KEY,")
-            sql_parts.append("    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,")
-            sql_parts.append("    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+            sql_parts.append("    " + ",\n    ".join(fields))
             sql_parts.append(");")
             sql_parts.append("")
         
         return "\n".join(sql_parts)
+    
+    def _generate_field_sql(self, field_name: str, field_obj: Any) -> str:
+        """Generate SQL for a specific field."""
+        field_type = self._get_field_type(field_obj)
+        constraints = self._get_field_constraints(field_obj)
+        
+        sql_parts = [f"{field_name} {field_type}"]
+        sql_parts.extend(constraints)
+        
+        return " ".join(sql_parts)
+    
+    def _get_field_type(self, field_obj: Any) -> str:
+        """Get the SQL type for a field."""
+        field_class = field_obj.__class__.__name__
+        
+        type_mapping = {
+            'CharField': 'VARCHAR',
+            'TextField': 'TEXT',
+            'IntField': 'INTEGER',
+            'IntegerField': 'INTEGER',
+            'FloatField': 'REAL',
+            'DecimalField': 'DECIMAL',
+            'BooleanField': 'BOOLEAN',
+            'DateTimeField': 'TIMESTAMP',
+            'DateField': 'DATE',
+            'TimeField': 'TIME',
+            'UUIDField': 'VARCHAR',
+            'JSONField': 'TEXT',
+            'BinaryField': 'BLOB',
+            'EmailField': 'VARCHAR',
+            'URLField': 'VARCHAR',
+            'SlugField': 'VARCHAR',
+            'FileField': 'VARCHAR',
+            'ImageField': 'VARCHAR',
+            'ArrayField': 'TEXT',
+            'RangeField': 'TEXT',
+            'HStoreField': 'TEXT',
+            'JSONBField': 'TEXT',
+        }
+        
+        base_type = type_mapping.get(field_class, 'TEXT')
+        
+        # Add length for VARCHAR fields
+        if base_type == 'VARCHAR':
+            max_length = getattr(field_obj, 'max_length', 255)
+            return f"VARCHAR({max_length})"
+        
+        # Add precision for DECIMAL fields
+        if base_type == 'DECIMAL':
+            max_digits = getattr(field_obj, 'max_digits', 10)
+            decimal_places = getattr(field_obj, 'decimal_places', 2)
+            return f"DECIMAL({max_digits},{decimal_places})"
+        
+        return base_type
+    
+    def _get_field_constraints(self, field_obj: Any) -> List[str]:
+        """Get constraints for a field."""
+        constraints = []
+        
+        # Primary key
+        if getattr(field_obj, 'primary_key', False):
+            constraints.append("PRIMARY KEY")
+        
+        # Auto increment
+        if getattr(field_obj, 'auto_increment', False):
+            constraints.append("AUTOINCREMENT")
+        
+        # Not null
+        if not getattr(field_obj, 'null', True):
+            constraints.append("NOT NULL")
+        
+        # Unique
+        if getattr(field_obj, 'unique', False):
+            constraints.append("UNIQUE")
+        
+        # Default value
+        default = getattr(field_obj, 'default', None)
+        if default is not None and default != '':
+            if isinstance(default, str):
+                constraints.append(f"DEFAULT '{default}'")
+            else:
+                constraints.append(f"DEFAULT {default}")
+        
+        return constraints
     
     def _generate_drop_tables_sql(self, models: List[Any]) -> str:
         """Generate DROP TABLE SQL from models."""
         sql_parts = []
         
         for model in reversed(models):  # Drop in reverse order for foreign key constraints
-            table_name = getattr(model, '__tablename__', model.__name__.lower())
+            table_name = getattr(model, '_meta', {}).table_name or model.__name__.lower()
             sql_parts.append(f"-- Drop table: {table_name}")
             sql_parts.append(f"DROP TABLE IF EXISTS {table_name};")
             sql_parts.append("")

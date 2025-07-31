@@ -569,6 +569,9 @@ class UnifiedEngine:
             elif isinstance(value, dict):  # JSON field
                 import json
                 converted_values.append(json.dumps(value))
+            elif isinstance(value, list):  # Array field
+                import json
+                converted_values.append(json.dumps(value))
             else:
                 converted_values.append(value)
         
@@ -578,10 +581,7 @@ class UnifiedEngine:
         else:
             placeholders = ["?" for _ in columns]
         
-        sql = f"""
-        INSERT INTO "{table_name}" ({', '.join(f'"{col}"' for col in columns)})
-        VALUES ({', '.join(placeholders)})
-        """
+        sql = self._generate_insert_sql(table_name, columns, placeholders)
         
         result = await self.execute_query(sql, converted_values)
         return result
@@ -592,14 +592,47 @@ class UnifiedEngine:
             return {"success": True, "rows_affected": 0, "data": {"ids": []}}
         
         columns = list(records[0].keys())
-        placeholders = ["?" for _ in columns]
         
-        sql = f"""
-        INSERT INTO "{table_name}" ({', '.join(f'"{col}"' for col in columns)})
-        VALUES ({', '.join(placeholders)})
-        """
+        # Convert all records to database-compatible format
+        converted_records = []
+        for record in records:
+            converted_record = {}
+            for key, value in record.items():
+                if hasattr(value, 'as_tuple'):  # Decimal
+                    if 'postgresql' in self.connection_string.lower():
+                        converted_record[key] = float(value)  # PostgreSQL numeric
+                    else:
+                        converted_record[key] = str(value)  # SQLite text
+                elif isinstance(value, (datetime, date, time)):
+                    if 'postgresql' in self.connection_string.lower():
+                        # PostgreSQL expects proper date/time types
+                        if isinstance(value, date):
+                            converted_record[key] = value  # Keep as date object
+                        elif isinstance(value, time):
+                            converted_record[key] = value  # Keep as time object
+                        elif isinstance(value, datetime):
+                            converted_record[key] = value  # Keep as datetime object
+                    else:
+                        converted_record[key] = str(value)  # SQLite as string
+                elif isinstance(value, dict):  # JSON field
+                    import json
+                    converted_record[key] = json.dumps(value)
+                elif isinstance(value, list):  # Array field
+                    import json
+                    converted_record[key] = json.dumps(value)
+                else:
+                    converted_record[key] = value
+            converted_records.append(converted_record)
         
-        params_list = [list(record.values()) for record in records]
+        # Use appropriate placeholders based on database type
+        if 'postgresql' in self.connection_string.lower():
+            placeholders = [f"${i+1}" for i in range(len(columns))]
+        else:
+            placeholders = ["?" for _ in columns]
+        
+        sql = self._generate_insert_sql(table_name, columns, placeholders)
+        
+        params_list = [list(record.values()) for record in converted_records]
         result = await self.execute_many(sql, params_list)
         
         # Add generated IDs to result
@@ -620,13 +653,15 @@ class UnifiedEngine:
     async def select_records(self, table_name: str, conditions: Optional[Dict[str, Any]] = None, 
                            limit: Optional[int] = None, offset: Optional[int] = None) -> Dict[str, Any]:
         """Select records from a table with optional conditions."""
-        sql = f'SELECT * FROM "{table_name}"'
+        quoted_table = self._quote_identifier(table_name)
+        sql = f'SELECT * FROM {quoted_table}'
         params = []
         
         if conditions:
             where_clauses = []
             for key, value in conditions.items():
-                where_clauses.append(f'"{key}" = ?')
+                quoted_key = self._quote_identifier(key)
+                where_clauses.append(f'{quoted_key} = ?')
                 params.append(value)
             sql += f" WHERE {' AND '.join(where_clauses)}"
         
@@ -664,6 +699,9 @@ class UnifiedEngine:
             elif isinstance(value, dict):  # JSON field
                 import json
                 converted_data[key] = json.dumps(value)
+            elif isinstance(value, list):  # Array field
+                import json
+                converted_data[key] = json.dumps(value)
             else:
                 converted_data[key] = value
         
@@ -682,15 +720,17 @@ class UnifiedEngine:
                     params.append(value)
                 sql += f" WHERE {' AND '.join(where_clauses)}"
         else:
-            set_clauses = [f'"{key}" = ?' for key in converted_data.keys()]
+            quoted_table = self._quote_identifier(table_name)
+            set_clauses = [f'{self._quote_identifier(key)} = ?' for key in converted_data.keys()]
             params = list(converted_data.values())
             
-            sql = f'UPDATE "{table_name}" SET {", ".join(set_clauses)}'
+            sql = f'UPDATE {quoted_table} SET {", ".join(set_clauses)}'
             
             if conditions:
                 where_clauses = []
                 for key, value in conditions.items():
-                    where_clauses.append(f'"{key}" = ?')
+                    quoted_key = self._quote_identifier(key)
+                    where_clauses.append(f'{quoted_key} = ?')
                     params.append(value)
                 sql += f" WHERE {' AND '.join(where_clauses)}"
         
@@ -699,13 +739,15 @@ class UnifiedEngine:
     
     async def delete_records(self, table_name: str, conditions: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Delete records from a table."""
-        sql = f'DELETE FROM "{table_name}"'
+        quoted_table = self._quote_identifier(table_name)
+        sql = f'DELETE FROM {quoted_table}'
         params = []
         
         if conditions:
             where_clauses = []
             for key, value in conditions.items():
-                where_clauses.append(f'"{key}" = ?')
+                quoted_key = self._quote_identifier(key)
+                where_clauses.append(f'{quoted_key} = ?')
                 params.append(value)
             sql += f" WHERE {' AND '.join(where_clauses)}"
         
@@ -738,6 +780,23 @@ class UnifiedEngine:
             "connected": self.is_connected,
             "backend": "rust" if RUST_AVAILABLE else "python"
         }
+
+    def _quote_identifier(self, identifier: str) -> str:
+        """Quote an identifier based on database type."""
+        if 'mysql' in self.connection_string.lower():
+            return f"`{identifier}`"
+        else:
+            return f'"{identifier}"'
+    
+    def _generate_insert_sql(self, table_name: str, columns: List[str], placeholders: List[str]) -> str:
+        """Generate INSERT SQL with proper quoting."""
+        quoted_table = self._quote_identifier(table_name)
+        quoted_columns = [self._quote_identifier(col) for col in columns]
+        
+        return f"""
+        INSERT INTO {quoted_table} ({', '.join(quoted_columns)})
+        VALUES ({', '.join(placeholders)})
+        """
 
 
 class UnifiedTransaction:

@@ -5,6 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/Diman2003/OxenORM)
 [![Production Ready](https://img.shields.io/badge/production-ready-success.svg)](https://github.com/Diman2003/OxenORM)
+[![Query System](https://img.shields.io/badge/query--system-stable-green.svg)](https://github.com/Diman2003/OxenORM)
+[![Update Operations](https://img.shields.io/badge/update--ops-stable-green.svg)](https://github.com/Diman2003/OxenORM)
 
 **OxenORM** is a revolutionary hybrid Object-Relational Mapper that combines the familiar Pythonic developer experience with the blazing-fast performance of Rust. Built according to [RFC 0001](https://github.com/Diman2003/OxenORM/blob/main/README.md), it delivers **10-20× speed-ups** versus popular pure-Python ORMs while maintaining full Python compatibility.
 
@@ -42,6 +44,20 @@
 - **Security features** with file upload validation
 - **Performance monitoring** with detailed metrics
 - **Error handling** and validation systems
+
+### 🔄 **Advanced Query System**
+- **Complex queries** with field lookups (`age__gt`, `name__icontains`)
+- **Q objects** for advanced filtering and logical operations
+- **Aggregations** with support for all major database functions
+- **Window functions** and Common Table Expressions (CTEs)
+- **Bulk operations** with optimized performance
+
+### ✏️ **Robust Update Operations**
+- **Model.update()** - Instance-level updates with field validation
+- **QuerySet.update()** - Bulk updates with complex conditions
+- **Field validation** - Type checking and conversion during updates
+- **Field lookups** - Support for comparison operators in updates
+- **Q objects** - Complex conditional updates
 
 ## 🏗️ **Architecture**
 
@@ -317,9 +333,9 @@ python scripts/generate_performance_graph.py
 OxenORM/
 ├── oxen/                    # Python package
 │   ├── __init__.py         # Main package
-│   ├── models.py           # Model definitions
+│   ├── models.py           # Model definitions with enhanced update operations
 │   ├── fields/             # Field types (including advanced types)
-│   ├── queryset.py         # Query interface
+│   ├── queryset.py         # Query interface with complex query support
 │   ├── engine.py           # Unified engine with performance monitoring
 │   ├── rust_bridge.py      # Python-Rust bridge
 │   ├── cli.py              # Command-line interface
@@ -335,7 +351,10 @@ OxenORM/
 │   ├── migration.rs       # Migration system
 │   ├── transaction.rs     # Transaction handling
 │   └── file_operations.rs # File and image processing
-├── tests/                  # Test suite
+├── tests/                  # Comprehensive test suite
+│   ├── test_update_operations.py  # Update operations tests
+│   ├── test_queryset_final.py    # Query system tests
+│   └── test_comprehensive_features.py  # Full feature tests
 ├── benchmarks/             # Performance tests
 ├── examples/               # Usage examples
 ├── docs/                   # Comprehensive documentation
@@ -444,6 +463,42 @@ Comprehensive documentation is available covering all aspects of OxenORM:
 - CLI reference with complete tool documentation
 - Best practices and troubleshooting guides
 - Production deployment and configuration guides
+
+### ✅ **Phase 5: Query System & Update Operations** - Complete
+- **Enhanced Query System** - Complex queries with field lookups and Q objects
+- **Robust Update Operations** - Model.update() and QuerySet.update() with validation
+- **Field Validation** - Type checking and conversion during updates
+- **Bulk Operations** - Optimized bulk updates with complex conditions
+- **Error Handling** - Comprehensive error handling for all operations
+
+## 🎉 **Recent Major Improvements**
+
+### **Query System Enhancements**
+- ✅ **Complex Queries** - Field lookups (`age__gt`, `name__icontains`) working perfectly
+- ✅ **Q Objects** - Advanced filtering and logical operations fully functional
+- ✅ **Exists Queries** - Fixed constructor issues and improved performance
+- ✅ **Aggregations** - Support for all major database functions
+- ✅ **Query Caching** - TTL-based caching with performance monitoring
+
+### **Update Operations Overhaul**
+- ✅ **Model.update()** - Enhanced with field validation and type conversion
+- ✅ **QuerySet.update()** - Bulk updates with complex conditions working
+- ✅ **Field Validation** - Comprehensive type checking during updates
+- ✅ **Field Lookups** - Support for comparison operators in updates
+- ✅ **Q Objects** - Complex conditional updates fully functional
+- ✅ **Decimal Handling** - Proper type conversion for SQLite compatibility
+
+### **Database Integration**
+- ✅ **PostgreSQL** - Full feature support with PostGIS and hstore extensions
+- ✅ **MySQL** - Complete compatibility with proper table name quoting
+- ✅ **SQLite** - Perfect for development and testing
+- ✅ **Multi-Database** - Simultaneous connections to multiple databases
+
+### **Migration System**
+- ✅ **Auto Schema Generation** - Automatic table creation from model definitions
+- ✅ **Field Analysis** - Comprehensive model field analysis and SQL generation
+- ✅ **Database Coordination** - Proper model-database connection management
+- ✅ **Migration Runner** - Robust migration execution with error handling
 
 ## 🤝 **Contributing**
 
