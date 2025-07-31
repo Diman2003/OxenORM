@@ -429,7 +429,12 @@ class Model(metaclass=ModelMeta):
             for field_name in self._meta.db_fields:
                 value = getattr(self, field_name, None)
                 if value is not None:
-                    data[field_name] = value
+                    # Convert value using field's to_db_value method
+                    field_obj = self._meta.fields_map.get(field_name)
+                    if field_obj:
+                        data[field_name] = field_obj.to_db_value(value)
+                    else:
+                        data[field_name] = value
             
             # Insert into database
             result = await db.insert_record(self._meta.table_name, data)
@@ -454,7 +459,12 @@ class Model(metaclass=ModelMeta):
                 if field_name != self._meta.pk_attr:  # Don't update primary key
                     value = getattr(self, field_name, None)
                     if value is not None:
-                        data[field_name] = value
+                        # Convert value using field's to_db_value method
+                        field_obj = self._meta.fields_map.get(field_name)
+                        if field_obj:
+                            data[field_name] = field_obj.to_db_value(value)
+                        else:
+                            data[field_name] = value
             
             # Update in database
             result = await db.update_records(

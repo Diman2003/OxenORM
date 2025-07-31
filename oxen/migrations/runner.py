@@ -131,8 +131,13 @@ class MigrationRunner:
             # Update status to running
             await self._update_migration_status(migration.id, MigrationStatus.RUNNING)
             
-            # Execute the migration SQL
-            await self.engine.execute_query(migration.up_sql)
+            # Split SQL into individual statements and execute each one
+            statements = self._split_sql_statements(migration.up_sql)
+            for i, statement in enumerate(statements):
+                if statement.strip():  # Skip empty statements
+                    result = await self.engine.execute_query(statement)
+                    if result.get('error'):
+                        raise Exception(f"Statement {i+1} failed: {result.get('error')}")
             
             # Update status to completed
             execution_time_ms = int((time.time() - start_time) * 1000)
@@ -149,6 +154,33 @@ class MigrationRunner:
             await self._update_migration_failed(migration.id, str(e))
             return False
     
+    def _split_sql_statements(self, sql: str) -> List[str]:
+        """Split SQL into individual statements."""
+        # Simple approach: split by semicolon, but be careful with comments
+        statements = []
+        lines = sql.split('\n')
+        current_statement = ""
+        
+        for line in lines:
+            # Skip comment lines
+            if line.strip().startswith('--'):
+                continue
+            
+            current_statement += line + "\n"
+            
+            # If line ends with semicolon, we have a complete statement
+            if line.strip().endswith(';'):
+                statement = current_statement.strip()
+                if statement:
+                    statements.append(statement)
+                current_statement = ""
+        
+        # Add any remaining statement
+        if current_statement.strip():
+            statements.append(current_statement.strip())
+        
+        return statements
+    
     async def rollback_migration(self, migration: Migration) -> bool:
         """Rollback a single migration."""
         start_time = time.time()
@@ -157,8 +189,11 @@ class MigrationRunner:
             # Update status to running
             await self._update_migration_status(migration.id, MigrationStatus.RUNNING)
             
-            # Execute the rollback SQL
-            await self.engine.execute_query(migration.down_sql)
+            # Split SQL into individual statements and execute each one
+            statements = self._split_sql_statements(migration.down_sql)
+            for statement in statements:
+                if statement.strip():  # Skip empty statements
+                    await self.engine.execute_query(statement)
             
             # Update status to rolled back
             execution_time_ms = int((time.time() - start_time) * 1000)

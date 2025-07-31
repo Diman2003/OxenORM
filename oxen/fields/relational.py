@@ -19,8 +19,24 @@ class RelationalField(Field):
         super().__init__(**kwargs)
         self.is_relational = True
     
+    def _validate(self, value: Any) -> Any:
+        """Base validation for relational fields."""
+        return self._validate_value(value)
+    
     def _validate_value(self, value: Any) -> Any:
         """Base validation for relational fields."""
+        return value
+    
+    def to_db_value(self, value: Any) -> Any:
+        """Convert Python value to database value."""
+        if value is None:
+            return None
+        if hasattr(value, 'pk'):
+            return value.pk
+        return value
+    
+    def from_db_value(self, value: Any) -> Any:
+        """Convert database value to Python value."""
         return value
     
     def _get_sql_type(self) -> str:
@@ -67,6 +83,15 @@ class ForeignKeyField(RelationalField):
             return value.pk
         else:
             raise ValueError("Value must be an ID or model instance")
+    
+    def from_db_value(self, value: Any) -> Any:
+        """Convert database value to Python value."""
+        if value is None:
+            return None
+        
+        # For now, just return the value as-is
+        # In a full implementation, this would fetch the related model instance
+        return value
     
     def _get_sql_type(self) -> str:
         """Get the SQL type for this field."""

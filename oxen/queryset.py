@@ -260,6 +260,9 @@ class QuerySet(AwaitableQuery[MODEL]):
         
         # Add keyword filters
         for key, value in kwargs.items():
+            # Convert model instances to their primary key values
+            if hasattr(value, 'pk'):
+                value = value.pk
             q_obj = Q(**{key: value})
             clone._q_objects.append(q_obj)
         

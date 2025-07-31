@@ -9,7 +9,7 @@ __author__ = "OxenORM Team"
 from .uvloop_config import configure_uvloop, is_uvloop_active, get_event_loop_info
 
 # Core imports
-from .models import Model, ModelMeta
+from .models import Model, ModelMeta, set_database_for_models
 from .fields import (
     Field, CharField, TextField, IntField, IntegerField, FloatField, DecimalField,
     BooleanField, DateField, DateTimeField, TimeField, UUIDField, JSONField,
@@ -37,7 +37,7 @@ except ImportError:
     OxenEngine = None
 
 __all__ = [
-    'Model', 'ModelMeta', 
+    'Model', 'ModelMeta', 'set_database_for_models',
     'Field', 'CharField', 'TextField', 'IntField', 'IntegerField', 'FloatField', 'DecimalField',
     'BooleanField', 'DateField', 'DateTimeField', 'TimeField', 'UUIDField', 'JSONField',
     'BinaryField', 'EmailField', 'URLField', 'SlugField', 'FileField', 'ImageField',

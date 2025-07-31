@@ -115,7 +115,7 @@ class MigrationGenerator:
                 for field_name, field_obj in model._meta.fields_map.items():
                     if field_name != 'id':  # Skip the default ID field
                         field_sql = self._generate_field_sql(field_name, field_obj)
-                        if field_sql:
+                        if field_sql:  # Only add non-None field SQL
                             fields.append(field_sql)
             
             # Add default ID field if not present
@@ -143,6 +143,10 @@ class MigrationGenerator:
     
     def _generate_field_sql(self, field_name: str, field_obj: Any) -> str:
         """Generate SQL for a specific field."""
+        # Skip ManyToMany fields as they don't create columns in the main table
+        if field_obj.__class__.__name__ == 'ManyToManyField':
+            return None
+        
         field_type = self._get_field_type(field_obj)
         constraints = self._get_field_constraints(field_obj)
         
@@ -178,6 +182,9 @@ class MigrationGenerator:
             'RangeField': 'TEXT',
             'HStoreField': 'TEXT',
             'JSONBField': 'TEXT',
+            'ForeignKeyField': 'INTEGER',
+            'OneToOneField': 'INTEGER',
+            'ManyToManyField': 'TEXT',  # ManyToMany doesn't have a direct column
         }
         
         base_type = type_mapping.get(field_class, 'TEXT')
@@ -219,7 +226,10 @@ class MigrationGenerator:
         default = getattr(field_obj, 'default', None)
         if default is not None and default != '':
             if isinstance(default, str):
-                constraints.append(f"DEFAULT '{default}'")
+                # Escape single quotes in string defaults and ensure proper quoting
+                escaped_default = default.replace("'", "''")
+                # Use double quotes for string defaults to avoid comment issues
+                constraints.append(f"DEFAULT \"{escaped_default}\"")
             else:
                 constraints.append(f"DEFAULT {default}")
         
