@@ -1,6 +1,6 @@
 [project]
 name = "oxen-orm"
-version = "0.1.0"
+version = "0.1.1"
 description = "High-performance Python ORM backed by Rust - 15× faster than SQLAlchemy"
 authors = [{name="OxenORM Team", email="team@oxenorm.dev"}]
 license = {text="MIT"}
@@ -39,8 +39,8 @@ issues = "https://github.com/Diman2003/OxenORM/issues"
 discussions = "https://github.com/Diman2003/OxenORM/discussions"
 
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
 
 [tool.setuptools.packages.find]
 include = ["oxen*"]
@@ -74,3 +74,7 @@ select = [
 asyncio_mode = "auto"
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "oxen_engine"
