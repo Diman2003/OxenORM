@@ -1,11 +1,11 @@
 [project]
 name = "oxen-orm"
-version = "0.1.1"
-description = "High-performance Python ORM backed by Rust - 15× faster than SQLAlchemy"
+version = "0.2.0"
+description = "High-performance Python ORM backed by Rust - 15× faster than SQLAlchemy with advanced features"
 authors = [{name="OxenORM Team", email="team@oxenorm.dev"}]
 license = {text="MIT"}
 readme = "README.md"
-keywords = ["sql", "mysql", "postgres", "sqlite", "relational", "database", "rdbms", "orm", "object mapper", "async", "asyncio", "rust", "high-performance"]
+keywords = ["sql", "mysql", "postgres", "sqlite", "relational", "database", "rdbms", "orm", "object mapper", "async", "asyncio", "rust", "high-performance", "window-functions", "cte", "migrations", "admin-interface"]
 dynamic = ["classifiers"]
 requires-python = ">=3.9"
 dependencies = [
@@ -30,6 +30,8 @@ postgres = ["asyncpg>=0.28.0"]
 mysql = ["aiomysql>=0.2.0"]
 sqlite = ["aiosqlite>=0.19.0"]
 performance = ["uvloop>=0.19.0"]
+admin = ["aiohttp>=3.8.0"]
+monitoring = ["psutil>=5.9.0"]
 
 [project.urls]
 homepage = "https://github.com/Diman2003/OxenORM"
