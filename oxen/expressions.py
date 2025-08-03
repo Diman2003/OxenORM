@@ -628,7 +628,7 @@ class WindowFunction:
         self.frame = frame
     
     def to_sql(self) -> str:
-        sql = f"{self.function}()"
+        sql = self.function
         if self.partition_by or self.order_by or self.frame:
             sql += " OVER ("
             if self.partition_by:

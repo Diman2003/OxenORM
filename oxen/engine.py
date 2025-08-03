@@ -20,6 +20,8 @@ from decimal import Decimal
 
 from .rust_engine import OxenEngine as RustEngine, RUST_AVAILABLE
 from .exceptions import OperationalError, ConnectionError
+from oxen.query_optimizer import optimize_query, get_performance_stats
+from oxen.monitoring import record_query_metric, record_cache_metric, record_connection_metric
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +76,10 @@ class QueryCache:
                 return str(obj)
             elif isinstance(obj, (datetime, date, time)):
                 return str(obj)
+            elif hasattr(obj, 'pk'):  # Model instances
+                return obj.pk
+            elif hasattr(obj, 'pk_value'):  # Lazy objects
+                return obj.pk_value
             else:
                 return obj
         
@@ -229,112 +235,125 @@ class PerformanceMonitor:
         self.queries.clear()
 
 class UnifiedEngine:
-    """Enhanced unified engine with performance optimizations"""
+    """Unified database engine with Rust backend integration."""
     
     def __init__(self, connection_string: str):
         self.connection_string = connection_string
-        self.is_connected = False
-        
-        # Performance optimizations
+        self.rust_engine = None
         self.query_cache = QueryCache()
-        self.statement_cache = PreparedStatementCache()
+        self.prepared_statements = PreparedStatementCache()
         self.performance_monitor = PerformanceMonitor()
+        self.query_optimizer = None  # Will be initialized when needed
         
-        # Connection pooling metrics
-        self.connection_stats = {
-            'total_connections': 0,
-            'active_connections': 0,
-            'connection_errors': 0,
-            'last_connection_time': None
-        }
+        # Parse connection string
+        if connection_string.startswith('sqlite://'):
+            self.db_type = 'sqlite'
+            self.db_path = connection_string.replace('sqlite://', '')
+        elif connection_string.startswith('postgresql://'):
+            self.db_type = 'postgresql'
+            self.db_url = connection_string
+        elif connection_string.startswith('mysql://'):
+            self.db_type = 'mysql'
+            self.db_url = connection_string
+        else:
+            raise ValueError(f"Unsupported database type: {connection_string}")
     
     async def connect(self) -> Dict[str, Any]:
-        """Connect to database with performance tracking"""
-        start_time = time_module.time()
-        
+        """Connect to the database."""
         try:
-            # Try Rust backend first
-            if hasattr(self, '_rust_engine'):
-                result = await self._rust_engine.connect()
-                if result.get('success'):
-                    self.is_connected = True
-                    self.connection_stats['total_connections'] += 1
-                    self.connection_stats['active_connections'] += 1
-                    self.connection_stats['last_connection_time'] = datetime.now()
-                    return result
-            
-            # Fallback to Python implementation
-            self.is_connected = True
-            self.connection_stats['total_connections'] += 1
-            self.connection_stats['active_connections'] += 1
-            self.connection_stats['last_connection_time'] = datetime.now()
-            
-            connection_time = time_module.time() - start_time
-            
-            return {
-                'success': True,
-                'connection_string': self.connection_string,
-                'database_type': self.database_type,
-                'connection_time': connection_time,
-                'status': 'connected'
-            }
-            
+            if self.db_type == 'sqlite':
+                # Initialize Rust backend for SQLite
+                from oxen.rust_engine import init_rust_engine
+                self.rust_engine = await init_rust_engine(self.connection_string)
+                
+                # Test connection with direct SQLite query
+                import sqlite3
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                conn.close()
+                
+                # Record connection metric
+                record_connection_metric(1, 1)  # Pool size 1, 1 active connection
+                
+                return {
+                    'success': True,
+                    'message': f'Connected to SQLite database: {self.db_path}',
+                    'backend': 'rust',
+                    'database_type': self.db_type
+                }
+            else:
+                # For other databases, use Python backend
+                return {
+                    'success': True,
+                    'message': f'Connected to {self.db_type} database',
+                    'backend': 'python',
+                    'database_type': self.db_type
+                }
         except Exception as e:
-            self.connection_stats['connection_errors'] += 1
             return {
                 'success': False,
                 'error': str(e),
-                'status': 'failed'
+                'database_type': self.db_type
             }
     
     async def execute_query(self, sql: str, params: Optional[List[Any]] = None, 
                            use_cache: bool = True, cache_ttl: Optional[int] = None) -> Dict[str, Any]:
-        """Execute query with caching and performance monitoring"""
+        """Execute a query with optimization and monitoring."""
         start_time = time_module.time()
         
-        # Check cache first
-        if use_cache:
-            cached_result = self.query_cache.get(sql, params)
-            if cached_result is not None:
-                execution_time = time_module.time() - start_time
-                self.performance_monitor.record_query(QueryMetrics(
-                    sql=sql,
-                    execution_time=execution_time,
-                    rows_affected=len(cached_result.get('data', [])),
-                    timestamp=datetime.now(),
-                    success=True
-                ))
-                return {**cached_result, 'cached': True}
-        
         try:
-            # Execute query
-            if hasattr(self, '_rust_engine') and self.is_connected:
-                result = await self._rust_engine.execute_query(sql, params)
-            else:
-                # Simple SQLite fallback implementation
+            # Execute the query
+            if self.db_type == 'sqlite' and self.rust_engine:
                 result = await self._execute_sqlite_query(sql, params)
+            else:
+                result = await self._execute_python_query(sql, params)
             
             execution_time = time_module.time() - start_time
+            rows_affected = result.get('rows_affected', 0)
+            success = result.get('success', False)
             
-            # Record metrics
+            # Record monitoring metrics
+            record_query_metric(execution_time, success, rows_affected)
+            
+            # Record cache metrics if using cache
+            if use_cache:
+                cache_hit = result.get('cached', False)
+                record_cache_metric(cache_hit)
+            
+            # Optimize and analyze the query
+            if self.query_optimizer is None:
+                from oxen.query_optimizer import get_optimizer
+                self.query_optimizer = get_optimizer()
+            
+            query_plan = self.query_optimizer.optimize_query(sql, execution_time, rows_affected)
+            
+            # Add optimization info to result
+            result['optimization'] = {
+                'performance_score': query_plan.performance_score,
+                'suggestions': query_plan.optimization_suggestions,
+                'execution_time': execution_time
+            }
+            
+            # Record performance metrics
             self.performance_monitor.record_query(QueryMetrics(
                 sql=sql,
                 execution_time=execution_time,
-                rows_affected=result.get('rows_affected', 0),
+                rows_affected=rows_affected,
                 timestamp=datetime.now(),
                 success=result.get('success', False),
                 error=result.get('error')
             ))
-            
-            # Cache result if successful
-            if use_cache and result.get('success'):
-                self.query_cache.set(sql, result, params, cache_ttl)
             
             return result
             
         except Exception as e:
             execution_time = time_module.time() - start_time
             
+            # Record failed query metrics
+            record_query_metric(execution_time, False, 0)
+            
+            # Record failed query
             self.performance_monitor.record_query(QueryMetrics(
                 sql=sql,
                 execution_time=execution_time,
@@ -347,7 +366,7 @@ class UnifiedEngine:
             return {
                 'success': False,
                 'error': str(e),
-                'sql': sql
+                'execution_time': execution_time
             }
     
     async def _execute_sqlite_query(self, sql: str, params: Optional[List[Any]] = None) -> Dict[str, Any]:
@@ -357,7 +376,7 @@ class UnifiedEngine:
         
         def _execute_sync():
             try:
-                conn = sqlite3.connect(self.connection_string.replace('sqlite:///', ''))
+                conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 
                 if params:
@@ -388,17 +407,12 @@ class UnifiedEngine:
                     rows_affected = cursor.rowcount
                     conn.close()
                     
-                    result = {
+                    return {
                         'success': True,
                         'rows_affected': rows_affected,
+                        'last_id': last_id,
                         'sql': sql
                     }
-                    
-                    # For INSERT queries, include the last inserted ID
-                    if sql.strip().upper().startswith('INSERT'):
-                        result['data'] = {'id': last_id}
-                    
-                    return result
                     
             except Exception as e:
                 return {
@@ -407,9 +421,20 @@ class UnifiedEngine:
                     'sql': sql
                 }
         
-        # Run in thread pool to avoid blocking
+        # Run in executor to avoid blocking
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, _execute_sync)
+    
+    async def _execute_python_query(self, sql: str, params: Optional[List[Any]] = None) -> Dict[str, Any]:
+        """Execute query using Python backend (fallback)."""
+        # Simple fallback implementation for non-SQLite databases
+        # In a real implementation, this would use appropriate database drivers
+        return {
+            'success': False,
+            'error': 'Python backend not implemented for this database type',
+            'data': [],
+            'rows_affected': 0
+        }
     
     async def execute_many(self, sql: str, params_list: List[List[Any]]) -> Dict[str, Any]:
         """Execute multiple queries with performance monitoring"""

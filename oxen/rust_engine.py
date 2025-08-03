@@ -14,6 +14,16 @@ except ImportError:
     RUST_AVAILABLE = False
 
 
+async def init_rust_engine(connection_string: str):
+    """Initialize and return a Rust engine instance."""
+    if not RUST_AVAILABLE:
+        raise ImportError("Rust engine not available. Please build the Rust module first.")
+    
+    engine = OxenEngine(connection_string)
+    await engine.connect()
+    return engine
+
+
 class OxenEngine:
     """
     Python wrapper for the Rust OxenEngine.

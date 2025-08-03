@@ -606,6 +606,26 @@ class QuerySet(AwaitableQuery[MODEL]):
                 clone._prefetch_related.append(arg)
         return clone
 
+    def window(self, **kwargs: 'WindowFunction') -> 'QuerySet[MODEL]':
+        """Add window functions to the query."""
+        clone = self._clone()
+        if not hasattr(clone, '_window_functions'):
+            clone._window_functions = {}
+        clone._window_functions.update(kwargs)
+        return clone
+
+    def with_cte(self, name: str, query: 'QuerySet', recursive: bool = False) -> 'QuerySet[MODEL]':
+        """Add a Common Table Expression (CTE) to the query."""
+        clone = self._clone()
+        if not hasattr(clone, '_ctes'):
+            clone._ctes = []
+        clone._ctes.append({
+            'name': name,
+            'query': query,
+            'recursive': recursive
+        })
+        return clone
+
     async def explain(self) -> Any:
         """Explain the query execution plan."""
         # This would be implemented with actual EXPLAIN logic
@@ -674,7 +694,40 @@ class QuerySet(AwaitableQuery[MODEL]):
                     pass
         
         # Build the query
-        query = f"SELECT * FROM {self.model._meta.table_name}"
+        select_fields = ["*"]
+        
+        # Add window functions to select fields
+        if hasattr(self, '_window_functions') and self._window_functions:
+            for alias, window_func in self._window_functions.items():
+                if hasattr(window_func, 'to_sql'):
+                    select_fields.append(f"{window_func.to_sql()} AS {alias}")
+                else:
+                    # Handle simple window functions
+                    select_fields.append(f"{window_func} AS {alias}")
+        
+        # Build CTE part if CTEs exist
+        cte_part = ""
+        if hasattr(self, '_ctes') and self._ctes:
+            cte_clauses = []
+            for cte in self._ctes:
+                cte_name = cte['name']
+                cte_query = cte['query']
+                recursive = cte['recursive']
+                
+                # Get the SQL from the CTE query
+                if hasattr(cte_query, 'sql'):
+                    cte_sql = cte_query.sql()
+                else:
+                    # For now, use a simple approach
+                    cte_sql = f"SELECT * FROM {cte_query.model._meta.table_name}"
+                
+                recursive_keyword = "RECURSIVE " if recursive else ""
+                cte_clauses.append(f"{recursive_keyword}{cte_name} AS ({cte_sql})")
+            
+            cte_part = "WITH " + ", ".join(cte_clauses) + " "
+        
+        # Build the main query
+        query = f"{cte_part}SELECT {', '.join(select_fields)} FROM {self.model._meta.table_name}"
         params = []
         
         # Add WHERE clause if conditions exist

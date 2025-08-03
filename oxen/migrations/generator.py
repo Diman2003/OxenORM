@@ -225,7 +225,26 @@ class MigrationGenerator:
         # Default value
         default = getattr(field_obj, 'default', None)
         if default is not None and default != '':
-            if isinstance(default, str):
+            if callable(default):
+                # Handle callable defaults (like lambda functions)
+                # For DateTimeField with auto_now_add, use CURRENT_TIMESTAMP
+                if hasattr(field_obj, 'auto_now_add') and field_obj.auto_now_add:
+                    constraints.append("DEFAULT CURRENT_TIMESTAMP")
+                elif hasattr(field_obj, 'auto_now') and field_obj.auto_now:
+                    constraints.append("DEFAULT CURRENT_TIMESTAMP")
+                else:
+                    # For other callable defaults, try to evaluate them
+                    try:
+                        evaluated_default = default()
+                        if isinstance(evaluated_default, str):
+                            escaped_default = evaluated_default.replace("'", "''")
+                            constraints.append(f"DEFAULT \"{escaped_default}\"")
+                        else:
+                            constraints.append(f"DEFAULT {evaluated_default}")
+                    except:
+                        # If we can't evaluate it, skip the default
+                        pass
+            elif isinstance(default, str):
                 # Escape single quotes in string defaults and ensure proper quoting
                 escaped_default = default.replace("'", "''")
                 # Use double quotes for string defaults to avoid comment issues

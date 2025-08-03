@@ -1,0 +1,11 @@
+{
+  "timestamp": "2025-08-04T00:14:27.466692",
+  "metrics": {},
+  "alerts": [],
+  "summary": {
+    "status": "healthy",
+    "active_alerts": 0,
+    "total_metrics": 0,
+    "last_updated": "2025-08-04T00:14:27.466694"
+  }
+}

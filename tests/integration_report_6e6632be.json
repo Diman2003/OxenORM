@@ -1,0 +1,119 @@
+{
+  "performance_stats": {
+    "total_queries": 5,
+    "avg_execution_time": 8.106231689453125e-07,
+    "avg_performance_score": 100.0,
+    "slow_queries_count": 0,
+    "critical_queries_count": 0,
+    "optimization_suggestions_count": 5
+  },
+  "slow_queries": [],
+  "critical_queries": [],
+  "all_queries": [
+    {
+      "sql": "SELECT 1 as test_value",
+      "query_type": "SELECT",
+      "execution_time": 0.0,
+      "rows_affected": 0,
+      "timestamp": "2025-08-03T22:05:10.689930",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 1 as test1",
+      "query_type": "SELECT",
+      "execution_time": 1.1920928955078125e-06,
+      "rows_affected": 0,
+      "timestamp": "2025-08-03T22:05:10.689972",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 2 as test2, 3 as test3",
+      "query_type": "SELECT",
+      "execution_time": 9.5367431640625e-07,
+      "rows_affected": 0,
+      "timestamp": "2025-08-03T22:05:10.689995",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 'hello' as greeting",
+      "query_type": "SELECT",
+      "execution_time": 9.5367431640625e-07,
+      "rows_affected": 0,
+      "timestamp": "2025-08-03T22:05:10.690014",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 1 as a, 2 as b, 3 as c",
+      "query_type": "SELECT",
+      "execution_time": 9.5367431640625e-07,
+      "rows_affected": 0,
+      "timestamp": "2025-08-03T22:05:10.690031",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    }
+  ]
+}

@@ -176,6 +176,11 @@ class DateTimeField(Field):
         super().__init__(**kwargs)
         self.auto_now = auto_now
         self.auto_now_add = auto_now_add
+        
+        # Set default function for auto_now_add
+        if auto_now_add and self.default is None:
+            from datetime import datetime
+            self.default = lambda: datetime.now()
     
     def _validate(self, value: Any) -> Any:
         if isinstance(value, str):

@@ -119,6 +119,19 @@ class MetaInfo:
                 self.db_default_fields.append((name, name, field_obj))
             else:
                 self.db_complex_fields.append((name, name, field_obj))
+            
+            # Categorize relational fields
+            if hasattr(field_obj, 'is_relational') and field_obj.is_relational:
+                if isinstance(field_obj, ForeignKeyField):
+                    self.fk_fields.add(name)
+                elif isinstance(field_obj, OneToOneField):
+                    self.o2o_fields.add(name)
+                elif isinstance(field_obj, ManyToManyField):
+                    self.m2m_fields.add(name)
+            
+            # Setup reverse accessors for relational fields
+            if hasattr(field_obj, 'setup_reverse_accessor'):
+                field_obj.setup_reverse_accessor(self.__class__, name)
 
 
 # Global model registry
@@ -170,6 +183,14 @@ class ModelMeta(type):
         
         # Register the model
         _MODEL_REGISTRY[name] = new_class
+        
+        # Setup reverse accessors after model is registered
+        for name, field_obj in meta.fields_map.items():
+            if hasattr(field_obj, 'is_relational') and field_obj.is_relational and hasattr(field_obj, 'related_name') and field_obj.related_name:
+                # Setup reverse accessor with the fully formed model class
+                from oxen.fields.relational import ReverseAccessor
+                reverse_accessor = ReverseAccessor(new_class, name, new_class)
+                setattr(field_obj._get_related_model(), field_obj.related_name, reverse_accessor)
         
         return new_class
 
@@ -319,9 +340,15 @@ class Model(metaclass=ModelMeta):
         """Validate relational field types."""
         if value is not None:
             field_object = cls._meta.fields_map[field_key]
-            if not isinstance(value, field_object.related_model):
+            related_model = field_object._get_related_model()
+            
+            # Accept LazyRelatedObject instances
+            if hasattr(value, 'model_class') and value.model_class == related_model:
+                return
+            
+            if not isinstance(value, related_model):
                 raise ValidationError(
-                    f"Field {field_key} expects {field_object.related_model.__name__}, "
+                    f"Field {field_key} expects {related_model.__name__}, "
                     f"got {type(value).__name__}"
                 )
 

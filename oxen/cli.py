@@ -126,7 +126,7 @@ def makemigrations(url: str, app: Optional[str]):
 @click.option('--url', '-u', required=True, help='Database connection URL')
 @click.option('--app', '-a', help='Specific app to migrate')
 @click.option('--fake', is_flag=True, help='Mark migrations as applied without running them')
-def migrate(url: str, app: Optional[str], fake: bool):
+def apply_migrations(url: str, app: Optional[str], fake: bool):
     """Apply pending migrations"""
     async def _migrate():
         try:
@@ -190,7 +190,7 @@ def shell():
 @shell.command()
 @click.option('--url', '-u', required=True, help='Database connection URL')
 @click.option('--models', '-m', help='Comma-separated list of model modules to import')
-def shell(url: str, models: Optional[str]):
+def start_shell(url: str, models: Optional[str]):
     """Start interactive Python shell with database connection"""
     async def _shell():
         try:
@@ -455,5 +455,10 @@ async def inspect_database_schema(engine: UnifiedEngine) -> Dict[str, Any]:
     return schema
 
 
+def main():
+    """Main entry point for the CLI"""
+    cli()
+
+
 if __name__ == '__main__':
-    cli() 
+    main() 

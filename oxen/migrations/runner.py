@@ -52,9 +52,18 @@ class MigrationRunner:
         result = await self.engine.execute_query(sql)
         migrations = []
         
-        for row in result['data']:
-            migration = Migration.from_dict(row)
-            migrations.append(migration)
+        # Handle case where result doesn't have 'data' key
+        if result.get('success') and result.get('data'):
+            for row in result['data']:
+                migration = Migration.from_dict(row)
+                migrations.append(migration)
+        elif result.get('success') and not result.get('data'):
+            # No migrations applied yet
+            return []
+        else:
+            # Handle error case
+            print(f"Warning: Could not fetch applied migrations: {result.get('error', 'Unknown error')}")
+            return []
         
         return migrations
     

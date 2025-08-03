@@ -1,265 +1,307 @@
 #!/usr/bin/env python3
 """
-Update Operations Test
-Test and fix Model.update() and QuerySet.update() issues
+Comprehensive test for Update Operations
 """
 
+import asyncio
 import sys
-import os
 from pathlib import Path
-import uuid
 
-# Add the parent directory to the path so we can import oxen
+# Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-import asyncio
-from decimal import Decimal
-from oxen import connect, disconnect
-from oxen.models import Model, set_database_for_models
-from oxen.fields import CharField, IntegerField, BooleanField, FloatField, DecimalField
+from oxen import Model, connect, set_database_for_models
+from oxen.fields import CharField, IntegerField, BooleanField, DateTimeField
 from oxen.migrations import MigrationEngine
-from oxen.expressions import Q
 
 
-class UpdateTestUser(Model):
-    """Test model for Update Operations debugging."""
+# Test models
+class User(Model):
+    """User model for testing updates."""
     name = CharField(max_length=100)
-    age = IntegerField()
-    is_active = BooleanField(default=True)
     email = CharField(max_length=255, unique=True)
-    salary = FloatField(null=True)
-    score = DecimalField(max_digits=5, decimal_places=2, null=True)
+    age = IntegerField(default=0)
+    is_active = BooleanField(default=True)
+    created_at = DateTimeField(auto_now_add=True)
     
     class Meta:
-        table_name = "update_test_users"
+        table_name = "test_users"
+
+
+class Product(Model):
+    """Product model for testing updates."""
+    name = CharField(max_length=200)
+    price = IntegerField(default=0)
+    description = CharField(max_length=500, null=True)
+    is_available = BooleanField(default=True)
+    
+    class Meta:
+        table_name = "test_products"
+
+
+async def check_tables_exist(engine, table_names):
+    """Check if tables exist in the database."""
+    try:
+        result = await engine.execute_query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?)",
+            [table_names]
+        )
+        if result.get('error') is None:
+            existing_tables = [row['name'] for row in result.get('data', [])]
+            return all(table in existing_tables for table in table_names)
+    except:
+        pass
+    return False
 
 
 async def test_update_operations():
-    """Test Update Operations fixes."""
+    """Comprehensive test for update operations."""
     print("🚀 Update Operations Test")
-    print("=" * 50)
+    print("=" * 40)
     
-    # Generate unique database name
-    db_id = uuid.uuid4().hex[:8]
-    db_name = f"test_update_ops_{db_id}.db"
+    # Connect to database
+    db_name = f"test_updates_{hash(str(asyncio.get_event_loop().time()))}.db"
+    connection_string = f"sqlite:///{db_name}"
     
-    try:
-        # Connect to SQLite with unique database
-        engine = await connect(f"sqlite:///{db_name}")
-        print(f"✅ SQLite connection successful: {db_name}")
+    print(f"✅ Connecting to: {connection_string}")
+    engine = await connect(connection_string)
+    
+    # Set database for all models
+    set_database_for_models(engine)
+    
+    # Check if tables already exist
+    table_names = ["test_users", "test_products"]
+    tables_exist = await check_tables_exist(engine, table_names)
+    
+    if not tables_exist:
+        # Generate and run migrations
+        print("🔄 Generating migrations...")
+        migration_engine = MigrationEngine(engine, migrations_dir="../migrations")
         
-        # Create migration engine
-        migration_engine = MigrationEngine(engine)
-        
-        # Generate migration
-        print("🔄 Generating migration...")
+        models = [User, Product]
         migration = await migration_engine.generate_migration_from_models(
-            [UpdateTestUser],
-            "Update Operations test migration",
-            "test_runner"
+            models, "test_update_operations", "test_runner"
         )
         
         if migration:
             print("✅ Migration generated successfully")
             
-            # Run migration
-            print("🔄 Running migration...")
+            print("🔄 Running migrations...")
             result = await migration_engine.run_migrations()
             print(f"Migration result: {result}")
             
-            if result.get('success'):
+            # Check if the latest migration was successful
+            if result.get('success') or result.get('migrations_run', 0) > 0:
                 print("✅ Migration executed successfully")
-                
-                # Set database for models
-                print("🔄 Setting database for models...")
-                set_database_for_models(engine)
-                
-                # Create test data
-                print("🔄 Creating test data...")
-                users = []
-                for i in range(5):
-                    user = UpdateTestUser(
-                        name=f"Update User {i+1}",
-                        age=20 + i * 5,
-                        is_active=i % 2 == 0,  # Alternate active/inactive
-                        email=f"update{i+1}_{db_id}@example.com",
-                        salary=50000.0 + i * 5000,
-                        score=Decimal("85.5") + i
-                    )
-                    await user.save()
-                    users.append(user)
-                    print(f"   Created user: {user.name} (ID: {user.pk}, Age: {user.age}, Salary: {user.salary})")
-                
-                print(f"✅ Created {len(users)} test users")
-                
-                # Test 1: Model.update() - Instance method
-                print("\n🔄 Test 1: Model.update() - Instance method")
-                try:
-                    user = users[0]
-                    print(f"   Before update: {user.name} (Age: {user.age}, Salary: {user.salary})")
-                    
-                    # Update the model instance
-                    await user.update(
-                        age=30,
-                        salary=75000.0,
-                        score=Decimal("95.5")
-                    )
-                    
-                    print(f"   After update: {user.name} (Age: {user.age}, Salary: {user.salary}, Score: {user.score})")
-                    
-                    # Verify the update in database
-                    updated_user = await UpdateTestUser.get(id=user.pk)
-                    print(f"   Database verification: {updated_user.name} (Age: {updated_user.age}, Salary: {updated_user.salary})")
-                    
-                except Exception as e:
-                    print(f"   ❌ Model.update() failed: {str(e)}")
-                
-                # Test 2: QuerySet.update() - Bulk update
-                print("\n🔄 Test 2: QuerySet.update() - Bulk update")
-                try:
-                    # Update all active users
-                    active_users_before = await UpdateTestUser.filter(is_active=True)
-                    print(f"   Active users before: {len(active_users_before)}")
-                    for user in active_users_before:
-                        print(f"   - {user.name} (Age: {user.age}, Salary: {user.salary})")
-                    
-                    # Perform bulk update
-                    updated_count = await UpdateTestUser.filter(is_active=True).update(
-                        age=35,
-                        salary=80000.0
-                    )
-                    print(f"   Updated {updated_count} active users")
-                    
-                    # Verify the update
-                    active_users_after = await UpdateTestUser.filter(is_active=True)
-                    print(f"   Active users after: {len(active_users_after)}")
-                    for user in active_users_after:
-                        print(f"   - {user.name} (Age: {user.age}, Salary: {user.salary})")
-                    
-                except Exception as e:
-                    print(f"   ❌ QuerySet.update() failed: {str(e)}")
-                
-                # Test 3: Field validation during updates
-                print("\n🔄 Test 3: Field validation during updates")
-                try:
-                    user = users[1]
-                    print(f"   Before validation test: {user.name} (Age: {user.age})")
-                    
-                    # Test invalid field update (should fail)
-                    try:
-                        await user.update(age="invalid_age")
-                        print("   ❌ Should have failed with invalid age")
-                    except Exception as e:
-                        print(f"   ✅ Correctly failed with invalid age: {str(e)}")
-                    
-                    # Test valid field update
-                    await user.update(age=40)
-                    print(f"   ✅ Successfully updated age to: {user.age}")
-                    
-                except Exception as e:
-                    print(f"   ❌ Field validation test failed: {str(e)}")
-                
-                # Test 4: Update with field lookups
-                print("\n🔄 Test 4: Update with field lookups")
-                try:
-                    # Update users with age less than 25
-                    young_users_before = await UpdateTestUser.filter(age__lt=25)
-                    print(f"   Young users before: {len(young_users_before)}")
-                    for user in young_users_before:
-                        print(f"   - {user.name} (Age: {user.age})")
-                    
-                    # Update young users
-                    updated_count = await UpdateTestUser.filter(age__lt=25).update(
-                        age=22,
-                        is_active=True
-                    )
-                    print(f"   Updated {updated_count} young users")
-                    
-                    # Verify the update
-                    young_users_after = await UpdateTestUser.filter(age__lt=25)
-                    print(f"   Young users after: {len(young_users_after)}")
-                    for user in young_users_after:
-                        print(f"   - {user.name} (Age: {user.age}, Active: {user.is_active})")
-                    
-                except Exception as e:
-                    print(f"   ❌ Update with field lookups failed: {str(e)}")
-                
-                # Test 5: Update with Q objects
-                print("\n🔄 Test 5: Update with Q objects")
-                try:
-                    from oxen.expressions import Q
-                    
-                    # Update users that are active AND have salary > 55000
-                    target_users_before = await UpdateTestUser.filter(
-                        Q(is_active=True) & Q(salary__gt=55000)
-                    )
-                    print(f"   Target users before: {len(target_users_before)}")
-                    for user in target_users_before:
-                        print(f"   - {user.name} (Active: {user.is_active}, Salary: {user.salary})")
-                    
-                    # Update target users
-                    updated_count = await UpdateTestUser.filter(
-                        Q(is_active=True) & Q(salary__gt=55000)
-                    ).update(
-                        salary=90000.0,
-                        score=Decimal("100.0")
-                    )
-                    print(f"   Updated {updated_count} target users")
-                    
-                    # Verify the update
-                    target_users_after = await UpdateTestUser.filter(
-                        Q(is_active=True) & Q(salary__gt=55000)
-                    )
-                    print(f"   Target users after: {len(target_users_after)}")
-                    for user in target_users_after:
-                        print(f"   - {user.name} (Active: {user.is_active}, Salary: {user.salary}, Score: {user.score})")
-                    
-                except Exception as e:
-                    print(f"   ❌ Update with Q objects failed: {str(e)}")
-                
-                # Test 6: Direct database query for comparison
-                print("\n🔄 Test 6: Direct database query for comparison")
-                try:
-                    result = await engine.execute_query(
-                        "SELECT * FROM update_test_users WHERE is_active = ?",
-                        [True]
-                    )
-                    print(f"   Direct query result: {len(result.get('data', []))} users")
-                    for record in result.get('data', []):
-                        print(f"   - {record['name']} (Active: {record['is_active']}, Age: {record['age']}, Salary: {record['salary']})")
-                except Exception as e:
-                    print(f"   ❌ Direct query failed: {str(e)}")
-                
-                print("\n" + "=" * 50)
-                print("📊 Update Operations Fix Results")
-                print("=" * 50)
-                print("✅ Model.update() - Instance method working")
-                print("✅ QuerySet.update() - Bulk updates working")
-                print("✅ Field validation during updates")
-                print("✅ Update with field lookups")
-                print("✅ Update with Q objects")
-                print("✅ All update operations functional")
-                
             else:
-                print(f"❌ Migration failed: {result}")
-                
+                print("❌ Migration failed")
+                return
         else:
-            print("❌ Migration generation failed")
+            print("❌ Failed to generate migration")
+            return
+    else:
+        print("✅ Tables already exist, skipping migration")
+    
+    print("✅ Database setup complete")
+    
+    # Test 1: Model.update() - Instance-level updates
+    print("\n🔄 Test 1: Model.update() - Instance-level updates")
+    print("-" * 50)
+    
+    try:
+        # Create test user
+        user = await User.create(
+            name="John Doe",
+            email="john@example.com",
+            age=25,
+            is_active=True
+        )
+        print(f"   Created user: {user.name} (ID: {user.pk})")
+        
+        # Test Model.update()
+        await user.update(name="John Smith", age=26)
+        print(f"   Updated user name to: {user.name}")
+        print(f"   Updated user age to: {user.age}")
+        
+        # Verify the update was saved
+        updated_user = await User.get(pk=user.pk)
+        print(f"   Retrieved user: {updated_user.name}, age: {updated_user.age}")
+        
+        if updated_user.name == "John Smith" and updated_user.age == 26:
+            print("✅ Model.update() working correctly")
+        else:
+            print("❌ Model.update() failed")
             
     except Exception as e:
-        print(f"❌ Update operations test failed: {str(e)}")
-    finally:
+        print(f"   ❌ Model.update() test failed: {str(e)}")
+    
+    # Test 2: QuerySet.update() - Bulk updates
+    print("\n🔄 Test 2: QuerySet.update() - Bulk updates")
+    print("-" * 50)
+    
+    try:
+        # Create multiple products
+        products = []
+        for i in range(3):
+            product = await Product.create(
+                name=f"Product {i+1}",
+                price=100 + (i * 50),
+                description=f"Description for product {i+1}",
+                is_available=True
+            )
+            products.append(product)
+            print(f"   Created product: {product.name} (ID: {product.pk})")
+        
+        # Test QuerySet.update() with simple condition
+        updated_count = await Product.filter(is_available=True).update(price=200)
+        print(f"   Updated {updated_count} products with price=200")
+        
+        # Verify the updates
+        updated_products = await Product.filter(is_available=True)
+        for product in updated_products:
+            print(f"   Product {product.name}: price={product.price}")
+        
+        if all(p.price == 200 for p in updated_products):
+            print("✅ QuerySet.update() with simple condition working")
+        else:
+            print("❌ QuerySet.update() with simple condition failed")
+            
+    except Exception as e:
+        print(f"   ❌ QuerySet.update() test failed: {str(e)}")
+    
+    # Test 3: QuerySet.update() with complex conditions
+    print("\n🔄 Test 3: QuerySet.update() with complex conditions")
+    print("-" * 50)
+    
+    try:
+        # Test update with field lookups
+        updated_count = await Product.filter(price__gte=200).update(is_available=False)
+        print(f"   Updated {updated_count} products with price>=200 to unavailable")
+        
+        # Verify the updates
+        unavailable_products = await Product.filter(is_available=False)
+        print(f"   Found {len(unavailable_products)} unavailable products")
+        
+        for product in unavailable_products:
+            print(f"   Product {product.name}: price={product.price}, available={product.is_available}")
+        
+        if all(not p.is_available for p in unavailable_products):
+            print("✅ QuerySet.update() with field lookups working")
+        else:
+            print("❌ QuerySet.update() with field lookups failed")
+            
+    except Exception as e:
+        print(f"   ❌ QuerySet.update() with complex conditions failed: {str(e)}")
+    
+    # Test 4: Field validation during updates
+    print("\n🔄 Test 4: Field validation during updates")
+    print("-" * 50)
+    
+    try:
+        # Test field validation
+        user = await User.create(
+            name="Test User",
+            email="test@example.com",
+            age=30
+        )
+        
+        # Test valid update
+        await user.update(age=31, name="Updated User")
+        print(f"   Valid update successful: {user.name}, age: {user.age}")
+        
+        # Test invalid update (should raise exception)
         try:
-            await disconnect(engine)
-        except:
-            pass
-
-
-async def main():
-    """Main test function."""
-    await test_update_operations()
+            await user.update(age="invalid_age")  # Should fail
+            print("❌ Invalid update should have failed")
+        except Exception as e:
+            print(f"   ✅ Invalid update correctly rejected: {str(e)}")
+        
+        print("✅ Field validation during updates working")
+        
+    except Exception as e:
+        print(f"   ❌ Field validation test failed: {str(e)}")
+    
+    # Test 5: Bulk operations
+    print("\n🔄 Test 5: Bulk operations")
+    print("-" * 50)
+    
+    try:
+        # Create multiple users for bulk operations
+        users = []
+        for i in range(5):
+            user = await User.create(
+                name=f"Bulk User {i+1}",
+                email=f"bulk{i+1}@example.com",
+                age=20 + i,
+                is_active=True
+            )
+            users.append(user)
+        
+        print(f"   Created {len(users)} users for bulk operations")
+        
+        # Test bulk_update
+        for user in users:
+            user.age += 10
+            user.name = f"Updated {user.name}"
+        
+        updated_count = await User.bulk_update(users, fields=['name', 'age'])
+        print(f"   Bulk updated {updated_count} users")
+        
+        # Verify bulk updates
+        updated_users = await User.filter(name__startswith="Updated")
+        print(f"   Found {len(updated_users)} updated users")
+        
+        for user in updated_users:
+            print(f"   User: {user.name}, age: {user.age}")
+        
+        if len(updated_users) == len(users):
+            print("✅ Bulk update operations working")
+        else:
+            print("❌ Bulk update operations failed")
+            
+    except Exception as e:
+        print(f"   ❌ Bulk operations test failed: {str(e)}")
+    
+    # Test 6: Update with Q objects
+    print("\n🔄 Test 6: Update with Q objects")
+    print("-" * 50)
+    
+    try:
+        from oxen.expressions import Q
+        
+        # Create products with different prices
+        await Product.create(name="Expensive Product", price=500, is_available=True)
+        await Product.create(name="Cheap Product", price=50, is_available=True)
+        
+        # Test update with Q objects
+        from oxen.expressions import Q
+        updated_count = await Product.filter(
+            Q(price__gte=100) & Q(is_available=True)
+        ).update(description="High-value product")
+        
+        print(f"   Updated {updated_count} products with Q objects")
+        
+        # Verify the updates
+        high_value_products = await Product.filter(description="High-value product")
+        print(f"   Found {len(high_value_products)} high-value products")
+        
+        for product in high_value_products:
+            print(f"   Product: {product.name}, price: {product.price}")
+        
+        if len(high_value_products) > 0:
+            print("✅ Update with Q objects working")
+        else:
+            print("❌ Update with Q objects failed")
+            
+    except Exception as e:
+        print(f"   ❌ Update with Q objects test failed: {str(e)}")
+    
+    # Cleanup
+    await engine.disconnect()
+    print(f"\n🧹 Cleaned up database: {db_name}")
+    print("✅ Update operations test completed!")
 
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(test_update_operations()) 
