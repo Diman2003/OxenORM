@@ -1095,56 +1095,41 @@ class CountQuery(AwaitableQuery):
                     # Skip if can't convert
                     pass
         
-        # Build the count query
-        query = f"SELECT COUNT(*) as count FROM {self.model._meta.table_name}"
-        params = []
-        
-        # Add WHERE clause if conditions exist
-        if conditions:
-            where_clauses = []
-            for key, value in conditions.items():
-                # Handle field lookups like age__lt
-                if '__' in key:
-                    field_name, lookup = key.split('__', 1)
-                    if lookup == 'lt':
-                        where_clauses.append(f"{field_name} < ?")
-                        params.append(value)
-                    elif lookup == 'lte':
-                        where_clauses.append(f"{field_name} <= ?")
-                        params.append(value)
-                    elif lookup == 'gt':
-                        where_clauses.append(f"{field_name} > ?")
-                        params.append(value)
-                    elif lookup == 'gte':
-                        where_clauses.append(f"{field_name} >= ?")
-                        params.append(value)
-                    elif lookup == 'in':
-                        if isinstance(value, (list, tuple)):
-                            placeholders = ', '.join(['?' for _ in value])
-                            where_clauses.append(f"{field_name} IN ({placeholders})")
-                            params.extend(value)
-                        else:
-                            where_clauses.append(f"{field_name} IN (?)")
-                            params.append(value)
-                    elif lookup == 'contains':
-                        where_clauses.append(f"{field_name} LIKE ?")
-                        params.append(f"%{value}%")
-                    elif lookup == 'startswith':
-                        where_clauses.append(f"{field_name} LIKE ?")
-                        params.append(f"{value}%")
-                    elif lookup == 'endswith':
-                        where_clauses.append(f"{field_name} LIKE ?")
-                        params.append(f"%{value}")
-                    else:
-                        # Unknown lookup, treat as exact match
-                        where_clauses.append(f"{field_name} = ?")
-                        params.append(value)
+        # Build IR for COUNT(*) with filters
+        dialect = 'postgres' if 'postgresql' in getattr(db, 'connection_string', '').lower() else (
+            'mysql' if 'mysql' in getattr(db, 'connection_string', '').lower() else 'sqlite'
+        )
+        filters = []
+        for key, value in conditions.items():
+            if '__' in key:
+                field_name, lookup = key.split('__', 1)
+                if lookup == 'startswith':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"{value}%"})
+                elif lookup == 'endswith':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"%{value}"})
+                elif lookup == 'contains':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"%{value}%"})
+                elif lookup in ('lt','lte','gt','gte','in','ne'):
+                    filters.append({'field': field_name, 'op': lookup, 'value': value})
                 else:
-                    where_clauses.append(f"{key} = ?")
-                    params.append(value)
-            
-            if where_clauses:
-                query += " WHERE " + " AND ".join(where_clauses)
+                    filters.append({'field': field_name, 'op': 'eq', 'value': value})
+            else:
+                filters.append({'field': key, 'op': 'eq', 'value': value})
+        ir = {
+            'dialect': dialect,
+            'table': self.model._meta.table_name,
+            'select': ['COUNT(*) as count'],
+            'filters': filters,
+        }
+        try:
+            from oxen_engine import build_sql_json
+            import json as _json
+            built = build_sql_json(_json.dumps(ir))
+            query = built.get('sql')
+            params = built.get('params')
+        except Exception:
+            query = f"SELECT COUNT(*) as count FROM {self.model._meta.table_name}"
+            params = []
         
         # Execute the count query
         result = await db.execute_query(query, params if params else None)

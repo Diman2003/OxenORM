@@ -43,6 +43,10 @@ struct QueryIR {
     #[serde(default)]
     distinct: bool,
     #[serde(default)]
+    joins: Vec<JoinIR>,
+    #[serde(default)]
+    groups: Vec<GroupIR>,
+    #[serde(default)]
     filters: Vec<FilterIR>,
     #[serde(default)]
     order_by: Vec<OrderByIR>,
@@ -66,6 +70,20 @@ struct OrderByIR {
     direction: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct JoinIR {
+    #[serde(default)]
+    join_type: Option<String>, // inner|left|right
+    table: String,
+    on: JoinOnIR,
+}
+
+#[derive(Debug, Deserialize)]
+struct JoinOnIR { left: String, op: String, right: String }
+
+#[derive(Debug, Deserialize)]
+struct GroupIR { #[serde(default)] kind: Option<String>, #[serde(default)] filters: Vec<FilterIR> }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DialectKind { Postgres, MySQL, SQLite }
 
@@ -79,9 +97,20 @@ impl DialectKind {
     }
 
     fn quote_ident(&self, ident: &str) -> String {
-        match self {
-            DialectKind::MySQL => format!("`{}`", ident.replace('`', "``")),
-            _ => format!("\"{}\"", ident.replace('"', "\"")),
+        // Support dotted paths: schema.table or table.column
+        if ident.contains('(') || ident.contains(')') || ident.contains(' ') {
+            // Treat as raw expression
+            return ident.to_string();
+        }
+        let quote_one = |name: &str, is_mysql: bool| -> String {
+            if is_mysql { format!("`{}`", name.replace('`', "``")) } else { format!("\"{}\"", name.replace('"', "\"")) }
+        };
+        let is_mysql = matches!(self, DialectKind::MySQL);
+        if ident.contains('.') {
+            let parts: Vec<String> = ident.split('.').map(|p| quote_one(p, is_mysql)).collect();
+            parts.join(".")
+        } else {
+            quote_one(ident, is_mysql)
         }
     }
 }
@@ -122,6 +151,19 @@ fn build_sql_from_ir(ir: &QueryIR) -> (String, Vec<ParamValue>) {
     sql.push_str(" FROM ");
     sql.push_str(&dialect.quote_ident(&ir.table));
 
+    // JOINS (basic ON left op right)
+    if !ir.joins.is_empty() {
+        for j in &ir.joins {
+            let jt = j.join_type.as_deref().unwrap_or("inner").to_lowercase();
+            let jt_sql = match jt.as_str() { "left" => " LEFT JOIN ", "right" => " RIGHT JOIN ", _ => " INNER JOIN " };
+            sql.push_str(jt_sql);
+            sql.push_str(&dialect.quote_ident(&j.table));
+            sql.push_str(" ON ");
+            let op = match j.on.op.as_str() { "=\n" => "=", "<>"|"!=" => "<>", ">" => ">", ">=" => ">=", "<" => "<", "<=" => "<=", _ => "=" };
+            sql.push_str(&format!("{} {} {}", dialect.quote_ident(&j.on.left), op, dialect.quote_ident(&j.on.right)));
+        }
+    }
+
     // WHERE from filters (AND all for v1)
     if !ir.filters.is_empty() {
         let mut first = true;
@@ -153,9 +195,12 @@ fn build_sql_from_ir(ir: &QueryIR) -> (String, Vec<ParamValue>) {
                     }
                 }
                 "like" | "ilike" => {
-                    // SQLite/MySQL lack ILIKE; emulate via LOWER when ilike
-                    if op == "ilike" && dialect != DialectKind::Postgres {
-                        sql.push_str(&format!("LOWER({}) LIKE LOWER(?)", field));
+                    // Case-insensitive match: Postgres supports ILIKE, others emulate
+                    if op == "ilike" {
+                        match dialect {
+                            DialectKind::Postgres => sql.push_str(&format!("{} ILIKE ?", field)),
+                            _ => sql.push_str(&format!("LOWER({}) LIKE LOWER(?)", field)),
+                        }
                     } else {
                         sql.push_str(&format!("{} LIKE ?", field));
                     }
@@ -173,6 +218,61 @@ fn build_sql_from_ir(ir: &QueryIR) -> (String, Vec<ParamValue>) {
                     sql.push_str(&format!("{} = ?", field));
                     params.push(json_to_paramvalue_value(&f.value));
                 }
+            }
+        }
+    }
+
+    // OR groups: (f1 OR f2 ...)
+    if !ir.groups.is_empty() {
+        for g in &ir.groups {
+            let kind = g.kind.as_deref().unwrap_or("or").to_lowercase();
+            if g.filters.is_empty() { continue; }
+            if kind == "or" {
+                if sql.contains(" WHERE ") { sql.push_str(" AND ("); } else { sql.push_str(" WHERE ("); }
+                for (i, f) in g.filters.iter().enumerate() {
+                    if i > 0 { sql.push_str(" OR "); }
+                    let field = dialect.quote_ident(&f.field);
+                    let op = f.op.to_lowercase();
+                    match op.as_str() {
+                        "in" => {
+                            if let serde_json::Value::Array(arr) = &f.value {
+                                if arr.is_empty() { sql.push_str("1=0"); }
+                                else {
+                                    sql.push_str(&format!("{} IN ({} )", field, {
+                                        let mut placeholders = String::new();
+                                        for (j, v) in arr.iter().enumerate() {
+                                            if j > 0 { placeholders.push_str(", "); }
+                                            placeholders.push('?');
+                                            params.push(json_to_paramvalue_value(v));
+                                        }
+                                        placeholders
+                                    }));
+                                }
+                            } else {
+                                sql.push_str(&format!("{} = ?", field));
+                                params.push(json_to_paramvalue_value(&f.value));
+                            }
+                        }
+                        "like" | "ilike" => {
+                            if op == "ilike" {
+                                match dialect {
+                                    DialectKind::Postgres => sql.push_str(&format!("{} ILIKE ?", field)),
+                                    _ => sql.push_str(&format!("LOWER({}) LIKE LOWER(?)", field)),
+                                }
+                            } else {
+                                sql.push_str(&format!("{} LIKE ?", field));
+                            }
+                            params.push(json_to_paramvalue_value(&f.value));
+                        }
+                        "ne" | "<>" => { sql.push_str(&format!("{} <> ?", field)); params.push(json_to_paramvalue_value(&f.value)); }
+                        "lt" => { sql.push_str(&format!("{} < ?", field)); params.push(json_to_paramvalue_value(&f.value)); }
+                        "lte" => { sql.push_str(&format!("{} <= ?", field)); params.push(json_to_paramvalue_value(&f.value)); }
+                        "gt" => { sql.push_str(&format!("{} > ?", field)); params.push(json_to_paramvalue_value(&f.value)); }
+                        "gte" => { sql.push_str(&format!("{} >= ?", field)); params.push(json_to_paramvalue_value(&f.value)); }
+                        _ => { sql.push_str(&format!("{} = ?", field)); params.push(json_to_paramvalue_value(&f.value)); }
+                    }
+                }
+                sql.push(')');
             }
         }
     }
@@ -229,6 +329,10 @@ fn build_sql_json(py: Python, ir_json: String) -> PyResult<PyObject> {
     out.set_item("sql", sql)?;
     out.set_item("params", py_params)?;
     Ok(out.into())
+}
+
+impl DatabasePool {
+    fn size(&self) -> usize { match self { DatabasePool::Postgres(p)=>p.size() as usize, DatabasePool::MySQL(p)=>p.size() as usize, DatabasePool::SQLite(p)=>p.size() as usize } }
 }
 
 #[derive(Error, Debug)]
@@ -1412,6 +1516,7 @@ fn oxen_engine(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_thumbnail, m)?)?;
     // Query builder
     m.add_function(wrap_pyfunction!(build_sql_json, m)?)?;
+    // Query builder already exposes build_sql_json; execute_ir_json is a method on OxenEngine
     
     Ok(())
 } 
