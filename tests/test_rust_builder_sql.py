@@ -104,3 +104,106 @@ def test_or_groups_and_ilike(dialect, expected_sql):
     out = build_sql_json(json.dumps(ir))
     assert out["sql"] == expected_sql
     assert out["params"] == ["%@gmail.com", "%@hotmail.com"]
+
+
+# Additional coverage per dialect
+
+@pytest.mark.parametrize(
+    "dialect,op,expected_fragment",
+    [
+        ("postgres", "eq", '"age" = $1'),
+        ("postgres", "ne", '"age" <> $1'),
+        ("postgres", "lt", '"age" < $1'),
+        ("postgres", "lte", '"age" <= $1'),
+        ("postgres", "gt", '"age" > $1'),
+        ("postgres", "gte", '"age" >= $1'),
+        ("mysql", "eq", '`age` = ?'),
+        ("mysql", "ne", '`age` <> ?'),
+        ("mysql", "lt", '`age` < ?'),
+        ("mysql", "lte", '`age` <= ?'),
+        ("mysql", "gt", '`age` > ?'),
+        ("mysql", "gte", '`age` >= ?'),
+        ("sqlite", "eq", '"age" = ?'),
+        ("sqlite", "ne", '"age" <> ?'),
+        ("sqlite", "lt", '"age" < ?'),
+        ("sqlite", "lte", '"age" <= ?'),
+        ("sqlite", "gt", '"age" > ?'),
+        ("sqlite", "gte", '"age" >= ?'),
+    ],
+)
+def test_all_ops(dialect, op, expected_fragment):
+    ir = {
+        "dialect": dialect,
+        "table": "users",
+        "select": ["id"],
+        "filters": [{"field": "age", "op": op, "value": 21}],
+    }
+    out = build_sql_json(json.dumps(ir))
+    assert expected_fragment in out["sql"]
+    assert out["params"] == [21]
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "mysql", "sqlite"])
+def test_in_list(dialect):
+    out = build_sql_json(
+        json.dumps(
+            {
+                "dialect": dialect,
+                "table": "users",
+                "select": ["id"],
+                "filters": [
+                    {"field": "id", "op": "in", "value": [1, 2, 3]},
+                ],
+            }
+        )
+    )
+    if dialect == "postgres":
+        assert '"id" IN ($1, $2, $3' in out["sql"] or '"id" IN ($1, $2, $3 )' in out["sql"]
+    elif dialect == "mysql":
+        assert "`id` IN (?, ?, ?" in out["sql"]
+    else:
+        assert '"id" IN (?, ?, ?' in out["sql"]
+    assert out["params"] == [1, 2, 3]
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "mysql", "sqlite"])
+def test_distinct_and_multi_order(dialect):
+    out = build_sql_json(
+        json.dumps(
+            {
+                "dialect": dialect,
+                "table": "users",
+                "select": ["id", "name"],
+                "distinct": True,
+                "order_by": [
+                    {"field": "name", "direction": "asc"},
+                    {"field": "id", "direction": "desc"},
+                ],
+            }
+        )
+    )
+    assert out["sql"].startswith("SELECT DISTINCT")
+    assert ("ORDER BY" in out["sql"]) and ("," in out["sql"].split("ORDER BY ")[1])
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "mysql", "sqlite"])
+def test_dotted_identifiers_and_join_types(dialect):
+    ir = {
+        "dialect": dialect,
+        "table": "schema.users" if dialect != "sqlite" else "main.users",
+        "select": ["users.id", "orders.total"],
+        "joins": [
+            {"join_type": "left", "table": "orders", "on": {"left": "users.id", "op": "=", "right": "orders.user_id"}},
+            {"join_type": "right", "table": "payments", "on": {"left": "users.id", "op": "=", "right": "payments.user_id"}},
+        ],
+    }
+    out = build_sql_json(json.dumps(ir))
+    assert "JOIN" in out["sql"]
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "mysql", "sqlite"])
+def test_limit_only_and_offset_only(dialect):
+    out = build_sql_json(json.dumps({"dialect": dialect, "table": "users", "select": ["id"], "limit": 7}))
+    assert "LIMIT 7" in out["sql"]
+    out2 = build_sql_json(json.dumps({"dialect": dialect, "table": "users", "select": ["id"], "offset": 11}))
+    assert "OFFSET 11" in out2["sql"]
