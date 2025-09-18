@@ -90,13 +90,15 @@ Operations on models, queries and complex aggregations:
 
 See :ref:`getting_started` for a more detailed guide.
 
-Pluggable Database backends
----------------------------
-OxenORM currently supports the following :ref:`databases`:
+Database support (via Rust engine)
+----------------------------------
+OxenORM supports the following databases via the Rust engine (SQLx):
 
-* `PostgreSQL` >= 9.4 (using ``asyncpg``)
-* `SQLite` (using ``aiosqlite``)
-* `MySQL`/`MariaDB` (using ``aiomysql``)
+* `PostgreSQL`
+* `SQLite`
+* `MySQL`/`MariaDB`
+
+All DB I/O is executed in Rust through the `oxen_engine` extension. No Python DB drivers are required.
 
 Multi-database support
 ---------------------
@@ -175,8 +177,25 @@ Development Installation
     # Install in development mode
     pip install -e .
 
-    # Build Rust extension
-    maturin develop
+    # Build and install the Rust extension locally
+    maturin develop --release
+
+Rust backend
+------------
+The Rust backend is enabled by default.
+
+* Ensure the `oxen_engine` extension is installed (prebuilt wheels or `maturin develop`).
+* To explicitly enable/disable at runtime, use the environment variable `OXEN_RUST_BACKEND`:
+
+  .. code-block:: bash
+
+      # Enable (default)
+      export OXEN_RUST_BACKEND=1
+
+      # Disable (for debugging only)
+      export OXEN_RUST_BACKEND=0
+
+When disabled, database I/O is not available from Python paths; OxenORM expects the Rust engine to be present.
 
 Quick Start
 ==========

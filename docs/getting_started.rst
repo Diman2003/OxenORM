@@ -21,20 +21,21 @@ The following table shows the available installation options for different datab
    * - MySQL
      - ``pip install "oxen-orm[mysql]"``
 
-Optional Dependencies
----------------------
-The following libraries can be used to improve performance:
-
-* `orjson <https://pypi.org/project/orjson/>`_: Automatically used if installed for JSON SerDes.
-* `uvloop <https://pypi.org/project/uvloop/>`_: Shown to improve performance as an alternative to ``asyncio``.
-* `ciso8601 <https://pypi.org/project/ciso8601/>`_: Automatically used if installed.
-  Not automatically installed on Windows due to often a lack of a C compiler. Default on Linux/CPython.
-
-The following command will install all optional dependencies:
+Rust backend
+------------
+OxenORM routes all database I/O through a Rust extension (`oxen_engine`). Build or install it before running:
 
 .. code-block:: bash
 
-    pip install "oxen-orm[dev]"
+    # Install prebuilt wheel (from PyPI) or build locally
+    pip install oxen-orm
+    # For local development builds:
+    maturin develop --release
+
+Optionally, you can tune the event loop:
+
+* `uvloop <https://pypi.org/project/uvloop/>`_
+* `orjson <https://pypi.org/project/orjson/>`_
 
 Tutorial
 ========

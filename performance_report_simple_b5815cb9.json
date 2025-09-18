@@ -1,0 +1,890 @@
+{
+  "performance_stats": {
+    "total_queries": 42,
+    "avg_execution_time": 0.00016983350118001303,
+    "avg_performance_score": 100.0,
+    "slow_queries_count": 0,
+    "critical_queries_count": 0,
+    "optimization_suggestions_count": 37
+  },
+  "slow_queries": [],
+  "critical_queries": [],
+  "all_queries": [
+    {
+      "sql": "\n        CREATE TABLE IF NOT EXISTS \"test_migrations\" (\n            \"id\" INTEGER PRIMARY KEY, \"name\" TEXT NOT NULL, \"created_at\" TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n        )\n        ",
+      "query_type": "CREATE",
+      "execution_time": 0.000698089599609375,
+      "rows_affected": 0,
+      "timestamp": "2025-09-16T14:34:54.131041",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "\n        INSERT INTO \"test_migrations\" (\"name\")\n        VALUES (?)\n        ",
+      "query_type": "INSERT",
+      "execution_time": 0.0004889965057373047,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.131803",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 0 as number",
+      "query_type": "SELECT",
+      "execution_time": 0.0006351470947265625,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.139565",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 1 as number",
+      "query_type": "SELECT",
+      "execution_time": 0.0001690387725830078,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.139870",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 2 as number",
+      "query_type": "SELECT",
+      "execution_time": 0.00014400482177734375,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.140157",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 3 as number",
+      "query_type": "SELECT",
+      "execution_time": 0.00014495849609375,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.140431",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 4 as number",
+      "query_type": "SELECT",
+      "execution_time": 0.00014901161193847656,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.140707",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 5 as number",
+      "query_type": "SELECT",
+      "execution_time": 0.0001652240753173828,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.141014",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 6 as number",
+      "query_type": "SELECT",
+      "execution_time": 0.00016999244689941406,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.141320",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 7 as number",
+      "query_type": "SELECT",
+      "execution_time": 0.00015211105346679688,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.141603",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 8 as number",
+      "query_type": "SELECT",
+      "execution_time": 0.00013208389282226562,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.141862",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 9 as number",
+      "query_type": "SELECT",
+      "execution_time": 0.00012111663818359375,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.142111",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "\n        CREATE TABLE IF NOT EXISTS \"users\" (\n            \"id\" INTEGER PRIMARY KEY, \"username\" TEXT UNIQUE, \"is_active\" BOOLEAN DEFAULT 1\n        )\n        ",
+      "query_type": "CREATE",
+      "execution_time": 0.0004031658172607422,
+      "rows_affected": 0,
+      "timestamp": "2025-09-16T14:34:54.164400",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "\n        CREATE TABLE IF NOT EXISTS \"posts\" (\n            \"id\" INTEGER PRIMARY KEY, \"title\" TEXT, \"author_id\" INTEGER, \"is_published\" BOOLEAN DEFAULT 0\n        )\n        ",
+      "query_type": "CREATE",
+      "execution_time": 0.00022029876708984375,
+      "rows_affected": 0,
+      "timestamp": "2025-09-16T14:34:54.164766",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "\n        INSERT INTO \"users\" (\"username\", \"is_active\")\n        VALUES (?, ?)\n        ",
+      "query_type": "INSERT",
+      "execution_time": 0.00017118453979492188,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.165065",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "\n        INSERT INTO \"posts\" (\"title\", \"author_id\", \"is_published\")\n        VALUES (?, ?, ?)\n        ",
+      "query_type": "INSERT",
+      "execution_time": 0.00014519691467285156,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.165331",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "\n            SELECT u.username, COUNT(p.id) as post_count\n            FROM users u\n            LEFT JOIN posts p ON u.id = p.author_id\n            WHERE u.is_active = 1\n            GROUP BY u.id, u.username\n        ",
+      "query_type": "SELECT",
+      "execution_time": 0.00019407272338867188,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.165744",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [
+          "users",
+          "posts"
+        ],
+        "joins": [],
+        "where_conditions": [
+          "u.is_active = 1"
+        ],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets",
+        "Consider adding index on column used in WHERE clause"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 0 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 0.00013303756713867188,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.166008",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 1 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 0.00012803077697753906,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.166246",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 2 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 0.00012111663818359375,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.166472",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 3 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 0.0001049041748046875,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.166686",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 4 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 0.00010275840759277344,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.166897",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 5 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 0.00011610984802246094,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.167118",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 6 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 9.703636169433594e-05,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.167320",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 7 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 0.00011420249938964844,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.167538",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 8 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 9.894371032714844e-05,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.167740",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 9 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 0.0001678466796875,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.168095",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 10 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 0.00012803077697753906,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.168382",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 11 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 9.989738464355469e-05,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.168589",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 12 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 0.000102996826171875,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.168797",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 13 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 9.489059448242188e-05,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.168997",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 14 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 0.0001010894775390625,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.169207",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 15 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 9.870529174804688e-05,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.169412",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 16 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 9.226799011230469e-05,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.169608",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 17 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 0.00010013580322265625,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.169817",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 18 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 9.894371032714844e-05,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.170023",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 19 as load_test",
+      "query_type": "SELECT",
+      "execution_time": 0.0001900196075439453,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.170388",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 0 as metric_test",
+      "query_type": "SELECT",
+      "execution_time": 0.00014734268188476562,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.172647",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 1 as metric_test",
+      "query_type": "SELECT",
+      "execution_time": 9.989738464355469e-05,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.172859",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 2 as metric_test",
+      "query_type": "SELECT",
+      "execution_time": 9.894371032714844e-05,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.173075",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 3 as metric_test",
+      "query_type": "SELECT",
+      "execution_time": 9.918212890625e-05,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.173286",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    },
+    {
+      "sql": "SELECT 4 as metric_test",
+      "query_type": "SELECT",
+      "execution_time": 9.298324584960938e-05,
+      "rows_affected": 1,
+      "timestamp": "2025-09-16T14:34:54.173488",
+      "database_type": "sqlite",
+      "plan_details": {
+        "tables_involved": [],
+        "joins": [],
+        "where_conditions": [],
+        "order_by": [],
+        "group_by": [],
+        "has_limit": false,
+        "has_offset": false
+      },
+      "optimization_suggestions": [
+        "Consider adding LIMIT clause to prevent large result sets"
+      ],
+      "performance_score": 100.0
+    }
+  ]
+}

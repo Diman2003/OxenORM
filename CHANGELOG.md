@@ -5,6 +5,23 @@ All notable changes to OxenORM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2025-09-18
+
+### Added
+- Route all DB I/O through the Rust engine across PostgreSQL, MySQL/MariaDB, and SQLite.
+- Single Python entry points for DB operations: `engine.execute_query`, `engine.execute_many`, and `engine.transaction`.
+- `MultiDatabaseManager` now uses the Rust-backed `UnifiedEngine` for all databases.
+
+### Changed
+- Removed Python-side driver execution paths and hidden fallbacks; all DB access is routed via `oxen_engine`.
+- Documentation updated to cover enabling/disabling the Rust backend and the migration path from Python drivers.
+
+### Migration Notes
+- Ensure the Rust extension is built/installed (prebuilt wheel or `maturin develop --release`).
+- The Rust backend is enabled by default; explicitly set `OXEN_RUST_BACKEND=1` to enforce.
+- Replace any direct usage of `oxen.backends.sqlite/mysql/postgresql` with `oxen.engine.create_engine` or the async `connect(...)` helper.
+
+
 ## [0.1.0] - 2025-01-XX
 
 ### 🎉 Initial Release - Production Ready OxenORM

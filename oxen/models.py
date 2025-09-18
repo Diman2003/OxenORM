@@ -32,6 +32,7 @@ from oxen.exceptions import (
     ParamsError, ValidationError, MultipleObjectsReturned
 )
 from oxen.queryset import QuerySet, QuerySetSingle, Q
+from oxen.engine import get_default_engine
 from oxen.manager import Manager
 from oxen.signals import Signals
 from oxen.validators import Validator
@@ -538,8 +539,8 @@ class Model(metaclass=ModelMeta):
     @classmethod
     def _choose_db(cls, for_write: bool = False) -> Any:
         """Choose database connection."""
-        # Return the database connection from meta
-        return cls._meta.db
+        # Return the database connection from meta, fallback to default engine
+        return cls._meta.db or get_default_engine()
     
     @classmethod
     def _set_rust_engine(cls, engine: Any) -> None:

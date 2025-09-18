@@ -11,6 +11,7 @@ import time as time_module
 import hashlib
 import json
 import logging
+import os
 from typing import Dict, List, Optional, Any, Tuple
 from collections import defaultdict, OrderedDict
 from dataclasses import dataclass, field
@@ -244,11 +245,20 @@ class UnifiedEngine:
         self.prepared_statements = PreparedStatementCache()
         self.performance_monitor = PerformanceMonitor()
         self.query_optimizer = None  # Will be initialized when needed
+        self.is_connected = False
+        self._connected = False
+        self.connection_stats = {
+            'pool_size': 0,
+            'active_connections': 0,
+        }
         
         # Parse connection string
         if connection_string.startswith('sqlite://'):
             self.db_type = 'sqlite'
+            # Normalize forms: sqlite:////abs/path or sqlite:///relative
             self.db_path = connection_string.replace('sqlite://', '')
+            # If path is like ///abs, leave as-is; sqlx accepts sqlite:///abs or file path
+            # Keep original connection_string for Rust, but keep db_path for directory creation
         elif connection_string.startswith('postgresql://'):
             self.db_type = 'postgresql'
             self.db_url = connection_string
@@ -257,37 +267,57 @@ class UnifiedEngine:
             self.db_url = connection_string
         else:
             raise ValueError(f"Unsupported database type: {connection_string}")
+        
+        # Feature flag to control Rust backend (defaults to enabled)
+        # Any non-"0" value enables Rust. Python I/O fallback is no longer supported.
+        self.use_rust = os.getenv('OXEN_RUST_BACKEND', '1') != '0'
     
     async def connect(self) -> Dict[str, Any]:
-        """Connect to the database."""
+        """Connect to the database using the Rust backend for all dialects."""
         try:
-            if self.db_type == 'sqlite':
-                # Initialize Rust backend for SQLite
-                from oxen.rust_engine import init_rust_engine
-                self.rust_engine = await init_rust_engine(self.connection_string)
-                
-                # Test connection with direct SQLite query
-                import sqlite3
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-                cursor.execute("SELECT 1")
-                conn.close()
-                
-                # Record connection metric
-                record_connection_metric(1, 1)  # Pool size 1, 1 active connection
-                
-                return {
-                    'success': True,
-                    'message': f'Connected to SQLite database: {self.db_path}',
-                    'backend': 'rust',
-                    'database_type': self.db_type
-                }
-            else:
-                # For other databases, use Python backend
+            # Ensure SQLite file parent directory exists (avoids 'unable to open database file')
+            if getattr(self, 'db_type', None) == 'sqlite':
+                db_path = getattr(self, 'db_path', '')
+                # Skip memory modes
+                if db_path and ':memory:' not in db_path and not db_path.startswith('file::memory:'):
+                    dirpath = os.path.dirname(db_path)
+                    if dirpath:
+                        try:
+                            os.makedirs(dirpath, exist_ok=True)
+                        except Exception:
+                            pass
+
+            if RUST_AVAILABLE and self.use_rust:
+                if getattr(self, '_rust_engine', None) is None:
+                    from .rust_bridge import OxenEngine as RustOxenEngine
+                    self._rust_engine = RustOxenEngine(self.connection_string)
+                result = await self._rust_engine.connect()
+                self.is_connected = True
+                self._connected = True
+                # expose rust engine
+                self.rust_engine = self._rust_engine
+                record_connection_metric(1, 1)
+                # best-effort pool stats
+                try:
+                    pool = await self._rust_engine.get_pool_status()
+                    if isinstance(pool, dict):
+                        self.connection_stats.update({
+                            'pool_size': int(pool.get('pool_size', 1)),
+                            'active_connections': int(pool.get('used_connections', 1)),
+                        })
+                except Exception:
+                    self.connection_stats['active_connections'] = 1
                 return {
                     'success': True,
                     'message': f'Connected to {self.db_type} database',
-                    'backend': 'python',
+                    'backend': 'rust',
+                    'database_type': self.db_type,
+                    'details': result,
+                }
+            else:
+                return {
+                    'success': False,
+                    'error': 'Rust backend not available or disabled (set OXEN_RUST_BACKEND=1 and build the Rust extension)',
                     'database_type': self.db_type
                 }
         except Exception as e:
@@ -303,12 +333,16 @@ class UnifiedEngine:
         start_time = time_module.time()
         
         try:
-            # Execute the query
-            if self.db_type == 'sqlite' and self.rust_engine:
-                result = await self._execute_sqlite_query(sql, params)
-            else:
-                result = await self._execute_python_query(sql, params)
+            # Execute the query via Rust backend only
+            if not getattr(self, '_rust_engine', None):
+                # Try to initialize/connect Rust engine lazily
+                await self.connect()
+            result = await self._execute_rust_query(sql, params)
             
+            # normalize success flag
+            if 'success' not in result:
+                result['success'] = result.get('error') is None
+
             execution_time = time_module.time() - start_time
             rows_affected = result.get('rows_affected', 0)
             success = result.get('success', False)
@@ -369,69 +403,37 @@ class UnifiedEngine:
                 'execution_time': execution_time
             }
     
-    async def _execute_sqlite_query(self, sql: str, params: Optional[List[Any]] = None) -> Dict[str, Any]:
-        """Execute a query using SQLite directly."""
-        import sqlite3
-        import asyncio
-        
-        def _execute_sync():
-            try:
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-                
-                if params:
-                    cursor.execute(sql, params)
-                else:
-                    cursor.execute(sql)
-                
-                # Handle different query types
-                if sql.strip().upper().startswith('SELECT'):
-                    # SELECT query
-                    rows = cursor.fetchall()
-                    columns = [description[0] for description in cursor.description]
-                    data = [dict(zip(columns, row)) for row in rows]
-                    
-                    conn.commit()
-                    conn.close()
-                    
-                    return {
-                        'success': True,
-                        'data': data,
-                        'rows_affected': len(data),
-                        'sql': sql
-                    }
-                else:
-                    # INSERT, UPDATE, DELETE query
-                    conn.commit()
-                    last_id = cursor.lastrowid
-                    rows_affected = cursor.rowcount
-                    conn.close()
-                    
-                    return {
-                        'success': True,
-                        'rows_affected': rows_affected,
-                        'last_id': last_id,
-                        'sql': sql
-                    }
-                    
-            except Exception as e:
-                return {
-                    'success': False,
-                    'error': str(e),
-                    'sql': sql
-                }
-        
-        # Run in executor to avoid blocking
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, _execute_sync)
+    async def _execute_rust_query(self, sql: str, params: Optional[List[Any]] = None) -> Dict[str, Any]:
+        """Execute a query using the Rust engine."""
+        if not getattr(self, '_rust_engine', None):
+            return {'success': False, 'error': 'Rust engine not initialized'}
+        # Ensure connection only if not already connected
+        try:
+            if not self._rust_engine.is_connected():
+                await self._rust_engine.connect()
+                self.is_connected = True
+                self._connected = True
+        except Exception:
+            # ignore if already connected
+            pass
+        try:
+            result = await self._rust_engine.execute_query(sql, params or None)
+            return result
+        except Exception as e:
+            msg = str(e)
+            if 'Not connected' in msg:
+                try:
+                    await self._rust_engine.connect()
+                    return await self._rust_engine.execute_query(sql, params or None)
+                except Exception as e2:
+                    return {'success': False, 'error': str(e2)}
+            return {'success': False, 'error': msg}
     
     async def _execute_python_query(self, sql: str, params: Optional[List[Any]] = None) -> Dict[str, Any]:
-        """Execute query using Python backend (fallback)."""
-        # Simple fallback implementation for non-SQLite databases
-        # In a real implementation, this would use appropriate database drivers
+        """Deprecated: Python DB I/O is disabled. Use Rust backend."""
         return {
             'success': False,
-            'error': 'Python backend not implemented for this database type',
+            'error': 'Python DB I/O disabled. Enable and build Rust backend (OXEN_RUST_BACKEND=1) to execute queries.',
             'data': [],
             'rows_affected': 0
         }
@@ -441,11 +443,9 @@ class UnifiedEngine:
         start_time = time_module.time()
         
         try:
-            if hasattr(self, '_rust_engine') and self.is_connected:
-                result = await self._rust_engine.execute_many(sql, params_list)
-            else:
-                # SQLite fallback implementation
-                result = await self._execute_sqlite_many(sql, params_list)
+            if not getattr(self, '_rust_engine', None) or not self.is_connected:
+                await self.connect()
+            result = await self._rust_engine.execute_many(sql, params_list)
             
             execution_time = time_module.time() - start_time
             
@@ -479,70 +479,34 @@ class UnifiedEngine:
             }
     
     async def _execute_sqlite_many(self, sql: str, params_list: List[List[Any]]) -> Dict[str, Any]:
-        """Execute multiple queries using SQLite directly."""
-        import sqlite3
-        import asyncio
-        
-        def _execute_sync():
-            try:
-                conn = sqlite3.connect(self.connection_string.replace('sqlite:///', ''))
-                cursor = conn.cursor()
-                
-                # Execute all queries
-                for params in params_list:
-                    cursor.execute(sql, params)
-                
-                conn.commit()
-                last_id = cursor.lastrowid
-                rows_affected = cursor.rowcount
-                conn.close()
-                
-                return {
-                    'success': True,
-                    'rows_affected': rows_affected,
-                    'sql': sql,
-                    'last_id': last_id
-                }
-                    
-            except Exception as e:
-                return {
-                    'success': False,
-                    'error': str(e),
-                    'sql': sql
-                }
-        
-        # Run in thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, _execute_sync)
+        """Deprecated: kept for compatibility. Routes to Rust if possible."""
+        if getattr(self, '_rust_engine', None):
+            return await self._rust_engine.execute_many(sql, params_list)
+        return {'success': False, 'error': 'Rust engine not initialized', 'sql': sql}
     
     @asynccontextmanager
     async def transaction(self):
         """Get a transaction context manager."""
         if not self._connected:
             raise ConnectionError("Not connected to database")
+        if not getattr(self, '_rust_engine', None):
+            raise ConnectionError("Rust engine not initialized. Ensure OXEN_RUST_BACKEND=1 and connect() was called.")
         
         transaction_id = None
         try:
-            if self.use_rust and self._rust_engine:
-                result = await self._rust_engine.begin_transaction()
-                transaction_id = result.get("id")
-                logger.info(f"Started Rust transaction: {transaction_id}")
-            else:
-                # Fallback to Python backend
-                await asyncio.sleep(0.001)
-                transaction_id = f"py_tx_{id(self)}"
-                logger.info(f"Started Python transaction: {transaction_id}")
+            result = await self._rust_engine.begin_transaction()
+            transaction_id = result.get("id")
+            logger.info(f"Started Rust transaction: {transaction_id}")
             
             yield UnifiedTransaction(self, transaction_id)
             
             # Commit transaction
-            if self.use_rust and self._rust_engine:
-                await self._rust_engine.commit_transaction(transaction_id)
+            await self._rust_engine.commit_transaction(transaction_id)
             logger.info(f"Committed transaction: {transaction_id}")
             
         except Exception as e:
             # Rollback transaction
-            if transaction_id and self.use_rust and self._rust_engine:
+            if transaction_id:
                 await self._rust_engine.rollback_transaction(transaction_id)
             logger.error(f"Rolled back transaction {transaction_id}: {e}")
             raise
@@ -850,12 +814,16 @@ class UnifiedTransaction:
 def create_engine(connection_string: str, use_rust: bool = True) -> UnifiedEngine:
     """Create a unified engine instance."""
     engine = UnifiedEngine(connection_string)
+    # Persist preference for Rust backend (env flag takes precedence)
+    env_flag = os.getenv('OXEN_RUST_BACKEND', None)
+    engine.use_rust = (env_flag != '0') if env_flag is not None else use_rust
     
     # Initialize Rust backend if available and requested
     if use_rust and RUST_AVAILABLE:
         try:
             from .rust_bridge import OxenEngine
             engine._rust_engine = OxenEngine(connection_string)
+            engine.rust_engine = engine._rust_engine
             print(f"✅ Rust backend initialized for: {connection_string}")
         except Exception as e:
             print(f"⚠️  Failed to initialize Rust backend: {e}")
@@ -865,12 +833,15 @@ def create_engine(connection_string: str, use_rust: bool = True) -> UnifiedEngin
 
 # Global engine registry for multi-database support
 _engines: Dict[str, UnifiedEngine] = {}
+_last_engine: Optional[UnifiedEngine] = None
 
 
 def register_engine(name: str, connection_string: str, use_rust: bool = True) -> UnifiedEngine:
     """Register a named engine."""
     engine = create_engine(connection_string, use_rust)
     _engines[name] = engine
+    global _last_engine
+    _last_engine = engine
     return engine
 
 
@@ -911,8 +882,16 @@ async def connect(connection_string: str, use_rust: bool = True) -> UnifiedEngin
     # Set the database connection for all models
     from oxen.models import set_database_for_models
     set_database_for_models(engine)
+    # Remember last engine for QuerySet fallback
+    global _last_engine
+    _last_engine = engine
     
     return engine
+
+
+def get_default_engine() -> Optional[UnifiedEngine]:
+    """Return the most recently created/connected engine if available."""
+    return _last_engine
 
 
 async def disconnect(engine: UnifiedEngine):
