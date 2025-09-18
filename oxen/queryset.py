@@ -726,73 +726,55 @@ class QuerySet(AwaitableQuery[MODEL]):
             
             cte_part = "WITH " + ", ".join(cte_clauses) + " "
         
-        # Build the main query
-        query = f"{cte_part}SELECT {', '.join(select_fields)} FROM {self.model._meta.table_name}"
-        params = []
-        
-        # Add WHERE clause if conditions exist
-        if conditions:
-            where_clauses = []
-            for key, value in conditions.items():
-                # Handle field lookups like age__lt
-                if '__' in key:
-                    field_name, lookup = key.split('__', 1)
-                    if lookup == 'lt':
-                        where_clauses.append(f"{field_name} < ?")
-                        params.append(value)
-                    elif lookup == 'lte':
-                        where_clauses.append(f"{field_name} <= ?")
-                        params.append(value)
-                    elif lookup == 'gt':
-                        where_clauses.append(f"{field_name} > ?")
-                        params.append(value)
-                    elif lookup == 'gte':
-                        where_clauses.append(f"{field_name} >= ?")
-                        params.append(value)
-                    elif lookup == 'startswith':
-                        where_clauses.append(f"{field_name} LIKE ?")
-                        params.append(f"{value}%")
-                    elif lookup == 'endswith':
-                        where_clauses.append(f"{field_name} LIKE ?")
-                        params.append(f"%{value}")
-                    elif lookup == 'contains':
-                        where_clauses.append(f"{field_name} LIKE ?")
-                        params.append(f"%{value}%")
-                    elif lookup == 'in':
-                        if isinstance(value, (list, tuple)):
-                            placeholders = ', '.join(['?' for _ in value])
-                            where_clauses.append(f"{field_name} IN ({placeholders})")
-                            params.extend(value)
-                        else:
-                            where_clauses.append(f"{field_name} IN (?)")
-                            params.append(value)
-                    else:
-                        # Unknown lookup, treat as exact match
-                        where_clauses.append(f"{field_name} = ?")
-                        params.append(value)
+        # Build IR for Rust builder
+        dialect = 'postgres' if 'postgresql' in getattr(db, 'connection_string', '').lower() else (
+            'mysql' if 'mysql' in getattr(db, 'connection_string', '').lower() else 'sqlite'
+        )
+        order_by = [
+            {'field': field, 'direction': direction.value}
+            for field, direction in self._orderings
+        ]
+        filters = []
+        for key, value in conditions.items():
+            if '__' in key:
+                field_name, lookup = key.split('__', 1)
+                if lookup == 'startswith':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"{value}%"})
+                elif lookup == 'endswith':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"%{value}"})
+                elif lookup == 'contains':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"%{value}%"})
+                elif lookup in ('lt','lte','gt','gte','in','ne'):
+                    filters.append({'field': field_name, 'op': lookup, 'value': value})
                 else:
-                    where_clauses.append(f"{key} = ?")
-                    params.append(value)
-            
-            if where_clauses:
-                query += " WHERE " + " AND ".join(where_clauses)
-        
-        # Add ORDER BY clause
-        if self._orderings:
-            order_clauses = []
-            for field, direction in self._orderings:
-                order_clauses.append(f"{field} {direction.value}")
-            query += " ORDER BY " + ", ".join(order_clauses)
-        
-        # Add LIMIT clause
-        if self._limit is not None:
-            query += f" LIMIT {self._limit}"
-        
-        # Add OFFSET clause
-        if self._offset is not None:
-            query += f" OFFSET {self._offset}"
-        
-        # Execute the query
+                    filters.append({'field': field_name, 'op': 'eq', 'value': value})
+            else:
+                filters.append({'field': key, 'op': 'eq', 'value': value})
+
+        ir = {
+            'dialect': dialect,
+            'table': self.model._meta.table_name,
+            'select': select_fields,
+            'distinct': bool(getattr(self, '_distinct', False)),
+            'filters': filters,
+            'order_by': order_by,
+            'limit': self._limit,
+            'offset': self._offset,
+        }
+
+        # Use Rust builder
+        try:
+            from oxen_engine import build_sql_json
+            import json as _json
+            built = build_sql_json(_json.dumps(ir))
+            query = built.get('sql')
+            params = built.get('params')
+        except Exception:
+            # Fallback: naive select all
+            query = f"SELECT * FROM {self.model._meta.table_name}"
+            params = []
+
+        # Execute via UnifiedEngine
         result = await db.execute_query(query, params if params else None)
         
         if result.get('error') is None:

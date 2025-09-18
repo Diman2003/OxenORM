@@ -33,6 +33,204 @@ use pyo3::types::PyDate as PyD;
 use pyo3::types::PyTime as PyT;
 use std::str::FromStr;
 
+// ===== Query IR (serde) and SQL builder =====
+#[derive(Debug, Deserialize)]
+struct QueryIR {
+    dialect: String,
+    table: String,
+    #[serde(default)]
+    select: Vec<String>,
+    #[serde(default)]
+    distinct: bool,
+    #[serde(default)]
+    filters: Vec<FilterIR>,
+    #[serde(default)]
+    order_by: Vec<OrderByIR>,
+    #[serde(default)]
+    limit: Option<i64>,
+    #[serde(default)]
+    offset: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FilterIR {
+    field: String,
+    op: String,
+    value: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct OrderByIR {
+    field: String,
+    #[serde(default)]
+    direction: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DialectKind { Postgres, MySQL, SQLite }
+
+impl DialectKind {
+    fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "postgres" | "postgresql" => DialectKind::Postgres,
+            "mysql" => DialectKind::MySQL,
+            _ => DialectKind::SQLite,
+        }
+    }
+
+    fn quote_ident(&self, ident: &str) -> String {
+        match self {
+            DialectKind::MySQL => format!("`{}`", ident.replace('`', "``")),
+            _ => format!("\"{}\"", ident.replace('"', "\"")),
+        }
+    }
+}
+
+fn json_to_paramvalue_value(v: &serde_json::Value) -> ParamValue {
+    match v {
+        serde_json::Value::Null => ParamValue::Null,
+        serde_json::Value::Bool(b) => ParamValue::Bool(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() { ParamValue::I64(i) }
+            else if let Some(f) = n.as_f64() { ParamValue::F64(f) }
+            else { ParamValue::Str(n.to_string()) }
+        }
+        serde_json::Value::String(s) => ParamValue::Str(s.clone()),
+        serde_json::Value::Array(a) => {
+            // For arrays (e.g., IN), we don't bind as a single param; handled at caller.
+            // Return JSON for completeness, though builder expands arrays.
+            ParamValue::Json(serde_json::Value::Array(a.clone()))
+        }
+        serde_json::Value::Object(o) => ParamValue::Json(serde_json::Value::Object(o.clone())),
+    }
+}
+
+fn build_sql_from_ir(ir: &QueryIR) -> (String, Vec<ParamValue>) {
+    let dialect = DialectKind::from_str(&ir.dialect);
+    let mut sql = String::new();
+    let mut params: Vec<ParamValue> = Vec::new();
+
+    // SELECT clause
+    sql.push_str("SELECT ");
+    if ir.distinct { sql.push_str("DISTINCT "); }
+    if ir.select.is_empty() {
+        sql.push('*');
+    } else {
+        let cols: Vec<String> = ir.select.iter().map(|c| dialect.quote_ident(c)).collect();
+        sql.push_str(&cols.join(", "));
+    }
+    sql.push_str(" FROM ");
+    sql.push_str(&dialect.quote_ident(&ir.table));
+
+    // WHERE from filters (AND all for v1)
+    if !ir.filters.is_empty() {
+        let mut first = true;
+        sql.push_str(" WHERE ");
+        for f in &ir.filters {
+            if !first { sql.push_str(" AND "); } else { first = false; }
+            let field = dialect.quote_ident(&f.field);
+            let op = f.op.to_lowercase();
+            match op.as_str() {
+                "in" => {
+                    if let serde_json::Value::Array(arr) = &f.value {
+                        if arr.is_empty() {
+                            sql.push_str("1=0");
+                        } else {
+                            sql.push_str(&format!("{} IN ({} )", field, {
+                                let mut placeholders = String::new();
+                                for (i, v) in arr.iter().enumerate() {
+                                    if i > 0 { placeholders.push_str(", "); }
+                                    placeholders.push('?');
+                                    params.push(json_to_paramvalue_value(v));
+                                }
+                                placeholders
+                            }));
+                        }
+                    } else {
+                        // Non-array IN: treat as equality
+                        sql.push_str(&format!("{} = ?", field));
+                        params.push(json_to_paramvalue_value(&f.value));
+                    }
+                }
+                "like" | "ilike" => {
+                    // SQLite/MySQL lack ILIKE; emulate via LOWER when ilike
+                    if op == "ilike" && dialect != DialectKind::Postgres {
+                        sql.push_str(&format!("LOWER({}) LIKE LOWER(?)", field));
+                    } else {
+                        sql.push_str(&format!("{} LIKE ?", field));
+                    }
+                    params.push(json_to_paramvalue_value(&f.value));
+                }
+                "ne" | "<>" => {
+                    sql.push_str(&format!("{} <> ?", field));
+                    params.push(json_to_paramvalue_value(&f.value));
+                }
+                "lt" => { sql.push_str(&format!("{} < ?", field)); params.push(json_to_paramvalue_value(&f.value)); }
+                "lte" => { sql.push_str(&format!("{} <= ?", field)); params.push(json_to_paramvalue_value(&f.value)); }
+                "gt" => { sql.push_str(&format!("{} > ?", field)); params.push(json_to_paramvalue_value(&f.value)); }
+                "gte" => { sql.push_str(&format!("{} >= ?", field)); params.push(json_to_paramvalue_value(&f.value)); }
+                _ => { // eq
+                    sql.push_str(&format!("{} = ?", field));
+                    params.push(json_to_paramvalue_value(&f.value));
+                }
+            }
+        }
+    }
+
+    // ORDER BY
+    if !ir.order_by.is_empty() {
+        sql.push_str(" ORDER BY ");
+        let mut parts: Vec<String> = Vec::new();
+        for ob in &ir.order_by {
+            let dir = ob.direction.as_deref().unwrap_or("asc");
+            parts.push(format!("{} {}", dialect.quote_ident(&ob.field), dir.to_uppercase()));
+        }
+        sql.push_str(&parts.join(", "));
+    }
+
+    // LIMIT/OFFSET
+    if let Some(lim) = ir.limit { sql.push_str(&format!(" LIMIT {}", lim)); }
+    if let Some(off) = ir.offset { sql.push_str(&format!(" OFFSET {}", off)); }
+
+    // Postgres placeholder normalization
+    if dialect == DialectKind::Postgres {
+        let normalized = normalize_placeholders_for_postgres(&sql, params.len());
+        return (normalized, params);
+    }
+    (sql, params)
+}
+
+#[pyfunction]
+fn build_sql_json(py: Python, ir_json: String) -> PyResult<PyObject> {
+    let ir: QueryIR = serde_json::from_str(&ir_json)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid IR: {}", e)))?;
+    let (sql, params) = build_sql_from_ir(&ir);
+    let py_params = PyList::empty(py);
+    for p in params {
+        // Convert ParamValue back to JSON-ish and then to PyObject
+        let j = match p {
+            ParamValue::Null => serde_json::Value::Null,
+            ParamValue::Bool(b) => serde_json::Value::Bool(b),
+            ParamValue::I64(i) => serde_json::Value::Number(serde_json::Number::from(i)),
+            ParamValue::F64(f) => serde_json::Number::from_f64(f).map(serde_json::Value::Number).unwrap_or(serde_json::Value::Null),
+            ParamValue::Str(s) => serde_json::Value::String(s),
+            ParamValue::Bytes(b) => serde_json::Value::String(base64::encode(b)),
+            ParamValue::Uuid(u) => serde_json::Value::String(u.to_string()),
+            ParamValue::Dec(d) => serde_json::Value::String(d.to_string()),
+            ParamValue::Json(v) => v,
+            ParamValue::Date(d) => serde_json::Value::String(d.to_string()),
+            ParamValue::Time(t) => serde_json::Value::String(t.to_string()),
+            ParamValue::DateTime(dt) => serde_json::Value::String(dt.to_string()),
+        };
+        let obj = json_to_py_object(py, j)?;
+        py_params.append(obj)?;
+    }
+    let out = PyDict::new(py);
+    out.set_item("sql", sql)?;
+    out.set_item("params", py_params)?;
+    Ok(out.into())
+}
+
 #[derive(Error, Debug)]
 pub enum OxenError {
     #[error("Database connection failed: {0}")]
@@ -1212,6 +1410,8 @@ fn oxen_engine(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_image_info, m)?)?;
     m.add_function(wrap_pyfunction!(convert_image_format, m)?)?;
     m.add_function(wrap_pyfunction!(create_thumbnail, m)?)?;
+    // Query builder
+    m.add_function(wrap_pyfunction!(build_sql_json, m)?)?;
     
     Ok(())
 } 
