@@ -4,6 +4,7 @@ Python bridge to the Rust backend for OxenORM
 
 import asyncio
 from typing import Dict, List, Optional, Any
+from .exceptions import OperationalError
 
 try:
     from oxen_engine import OxenEngine as RustOxenEngine
@@ -52,10 +53,10 @@ class OxenEngine:
         if not RUST_AVAILABLE:
             raise ImportError("Rust backend not available. Please build with: cargo build")
         import json as _json
-        built = _rust_build_sql_json(_json.dumps(ir))
-        query: str = built.get("sql")
-        params: List[Any] = built.get("params") or []
-        return await self.execute_query(query, params)
+        loop = asyncio.get_event_loop()
+        # Call directly into Rust execute_ir_json to enable chunked insert-many and dialect execution
+        result = await loop.run_in_executor(None, self._rust_engine.execute_ir_json, _json.dumps(ir))
+        return result
     
     async def execute_many(self, query: str, params_list: List[List[Any]]) -> Dict[str, Any]:
         """Execute a query with multiple parameter sets"""

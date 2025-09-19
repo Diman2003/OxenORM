@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyList, PyDict, PyBytes, PyString};
 use std::collections::HashMap;
 use sqlx::{
-    PgPool, postgres::PgPoolOptions, 
+    PgPool, postgres::{PgPoolOptions, PgConnectOptions}, 
     MySqlPool, mysql::MySqlPoolOptions,
     SqlitePool, sqlite::SqlitePoolOptions,
     Row, query::Query, Postgres, postgres::PgArguments, 
@@ -24,6 +24,9 @@ use pyo3::wrap_pyfunction;
 use std::fs;
 use std::path::Path;
 use std::io::{Read, Write};
+use std::time::Instant;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
 use image::{DynamicImage, GenericImageView};
 use image::imageops::{resize, blur, brighten, contrast};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
@@ -62,6 +65,8 @@ struct QueryIR {
     rows: Option<Vec<serde_json::Map<String, serde_json::Value>>>, // for insert-many
     #[serde(default)]
     with_sql: Option<String>, // optional CTE prefix without leading WITH
+    #[serde(default)]
+    returning: Option<Vec<String>>, // optional returning list (Postgres)
 }
 
 #[derive(Debug, Deserialize)]
@@ -149,8 +154,37 @@ fn json_to_paramvalue_value(v: &serde_json::Value) -> ParamValue {
         }
         serde_json::Value::String(s) => ParamValue::Str(s.clone()),
         serde_json::Value::Array(a) => {
-            // For arrays (e.g., IN), we don't bind as a single param; handled at caller.
-            // Return JSON for completeness, though builder expands arrays.
+            if a.is_empty() {
+                // Empty array - default to JSON to avoid ambiguous type, caller may override
+                return ParamValue::Json(serde_json::Value::Array(vec![]));
+            }
+            let mut all_str = true;
+            let mut all_bool = true;
+            let mut only_numbers = true;
+            let mut has_float = false;
+            let mut strs: Vec<String> = Vec::new();
+            let mut bools: Vec<bool> = Vec::new();
+            let mut i64s: Vec<i64> = Vec::new();
+            let mut f64s: Vec<f64> = Vec::new();
+            for el in a.iter() {
+                match el {
+                    serde_json::Value::String(s) => { strs.push(s.clone()); bools.push(false); i64s.push(0); f64s.push(0.0); only_numbers = false; all_bool = false; }
+                    serde_json::Value::Bool(b) => { bools.push(*b); all_str = false; only_numbers = false; }
+                    serde_json::Value::Number(n) => {
+                        all_str = false; all_bool = false;
+                        if let Some(i) = n.as_i64() { i64s.push(i); f64s.push(i as f64); }
+                        else if let Some(f) = n.as_f64() { f64s.push(f); has_float = true; }
+                        else { has_float = true; }
+                    }
+                    _ => { all_str = false; all_bool = false; only_numbers = false; }
+                }
+            }
+            if all_str { return ParamValue::ArrayStr(strs.into_iter().filter(|s| !s.is_empty() || true).collect()); }
+            if all_bool { return ParamValue::ArrayBool(bools); }
+            if only_numbers {
+                if has_float { return ParamValue::ArrayF64(f64s); }
+                else { return ParamValue::ArrayI64(i64s); }
+            }
             ParamValue::Json(serde_json::Value::Array(a.clone()))
         }
         serde_json::Value::Object(o) => ParamValue::Json(serde_json::Value::Object(o.clone())),
@@ -284,7 +318,7 @@ fn build_sql_from_ir(ir: &QueryIR) -> (String, Vec<ParamValue>) {
     // WHERE from filters (AND all for v1)
     if !ir.filters.is_empty() {
         let mut first = true;
-        // For update/delete we may already have SET clause
+        // For update/delete/select we add WHERE before filters
         sql.push_str(" WHERE ");
         for f in &ir.filters {
             if !first { sql.push_str(" AND "); } else { first = false; }
@@ -496,6 +530,16 @@ fn build_sql_from_ir(ir: &QueryIR) -> (String, Vec<ParamValue>) {
         if let Some(off) = ir.offset { sql.push_str(&format!(" OFFSET {}", off)); }
     }
 
+    // Append RETURNING at end for Postgres when provided and action is insert/update/delete
+    if matches!(dialect, DialectKind::Postgres) && (action == "insert" || action == "update" || action == "delete") {
+        if let Some(ret) = ir.returning.as_ref() {
+            if !ret.is_empty() {
+                sql.push_str(" RETURNING ");
+                sql.push_str(&ret.iter().map(|c| dialect.quote_ident(c)).collect::<Vec<_>>().join(", "));
+            }
+        }
+    }
+
     // Postgres placeholder normalization
     if dialect == DialectKind::Postgres {
         let normalized = normalize_placeholders_for_postgres(&sql, params.len());
@@ -518,7 +562,7 @@ fn build_sql_json(py: Python, ir_json: String) -> PyResult<PyObject> {
             ParamValue::I64(i) => serde_json::Value::Number(serde_json::Number::from(i)),
             ParamValue::F64(f) => serde_json::Number::from_f64(f).map(serde_json::Value::Number).unwrap_or(serde_json::Value::Null),
             ParamValue::Str(s) => serde_json::Value::String(s),
-            ParamValue::Bytes(b) => serde_json::Value::String(base64::encode(b)),
+            ParamValue::Bytes(b) => serde_json::Value::String(BASE64_STANDARD.encode(b)),
             ParamValue::Uuid(u) => serde_json::Value::String(u.to_string()),
             ParamValue::Dec(d) => serde_json::Value::String(d.to_string()),
             ParamValue::Json(v) => v,
@@ -541,6 +585,102 @@ fn build_sql_json(py: Python, ir_json: String) -> PyResult<PyObject> {
 
 impl DatabasePool {
     fn size(&self) -> usize { match self { DatabasePool::Postgres(p)=>p.size() as usize, DatabasePool::MySQL(p)=>p.size() as usize, DatabasePool::SQLite(p)=>p.size() as usize } }
+}
+
+// Execute large insert-many IR in chunks; for Postgres use single transaction
+async fn execute_insert_rows_chunked(pool: &DatabasePool, ir: &QueryIR, chunk_size: usize) -> Result<QueryResult, OxenError> {
+    let mut total_rows_affected: i64 = 0;
+    match pool {
+        DatabasePool::Postgres(pg_pool) => {
+            let pool_ref: &PgPool = pg_pool.as_ref();
+            let mut tx = pool_ref.begin().await.map_err(OxenError::QueryError)?;
+            let rows = ir.rows.as_ref().ok_or_else(|| OxenError::ParameterError("rows missing".to_string()))?;
+            for chunk in rows.chunks(chunk_size) {
+                // Build a chunked IR
+                let chunk_ir = QueryIR {
+                    dialect: ir.dialect.clone(),
+                    table: ir.table.clone(),
+                    action: Some("insert".to_string()),
+                    select: Vec::new(),
+                    distinct: false,
+                    joins: Vec::new(),
+                    groups: Vec::new(),
+                    filters: Vec::new(),
+                    order_by: Vec::new(),
+                    limit: None,
+                    offset: None,
+                    set: None,
+                    rows: Some(chunk.to_vec()),
+                    with_sql: ir.with_sql.clone(),
+                    returning: ir.returning.clone(),
+                };
+                let (sql, params) = build_sql_from_ir(&chunk_ir);
+                let sql_to_run = if sql.contains('?') { normalize_placeholders_for_postgres(&sql, params.len()) } else { sql };
+                let mut query = sqlx::query(&sql_to_run);
+                for param in params.iter() { query = bind_postgres_param(query, param); }
+                let result = query.execute(&mut *tx).await.map_err(OxenError::QueryError)?;
+                total_rows_affected += result.rows_affected() as i64;
+            }
+            tx.commit().await.map_err(OxenError::QueryError)?;
+            Ok(QueryResult { rows_affected: total_rows_affected, data: Vec::new(), error: None, elapsed_ms: None })
+        }
+        DatabasePool::MySQL(mysql_pool) => {
+            let rows = ir.rows.as_ref().ok_or_else(|| OxenError::ParameterError("rows missing".to_string()))?;
+            for chunk in rows.chunks(chunk_size) {
+                let chunk_ir = QueryIR {
+                    dialect: ir.dialect.clone(),
+                    table: ir.table.clone(),
+                    action: Some("insert".to_string()),
+                    select: Vec::new(),
+                    distinct: false,
+                    joins: Vec::new(),
+                    groups: Vec::new(),
+                    filters: Vec::new(),
+                    order_by: Vec::new(),
+                    limit: None,
+                    offset: None,
+                    set: None,
+                    rows: Some(chunk.to_vec()),
+                    with_sql: ir.with_sql.clone(),
+                    returning: ir.returning.clone(),
+                };
+                let (sql, params) = build_sql_from_ir(&chunk_ir);
+                let mut query = sqlx::query(&sql);
+                for param in params.iter() { query = bind_mysql_param(query, param); }
+                let result = query.execute(mysql_pool.as_ref()).await.map_err(OxenError::QueryError)?;
+                total_rows_affected += result.rows_affected() as i64;
+            }
+            Ok(QueryResult { rows_affected: total_rows_affected, data: Vec::new(), error: None, elapsed_ms: None })
+        }
+        DatabasePool::SQLite(sqlite_pool) => {
+            let rows = ir.rows.as_ref().ok_or_else(|| OxenError::ParameterError("rows missing".to_string()))?;
+            for chunk in rows.chunks(chunk_size) {
+                let chunk_ir = QueryIR {
+                    dialect: ir.dialect.clone(),
+                    table: ir.table.clone(),
+                    action: Some("insert".to_string()),
+                    select: Vec::new(),
+                    distinct: false,
+                    joins: Vec::new(),
+                    groups: Vec::new(),
+                    filters: Vec::new(),
+                    order_by: Vec::new(),
+                    limit: None,
+                    offset: None,
+                    set: None,
+                    rows: Some(chunk.to_vec()),
+                    with_sql: ir.with_sql.clone(),
+                    returning: ir.returning.clone(),
+                };
+                let (sql, params) = build_sql_from_ir(&chunk_ir);
+                let mut query = sqlx::query(&sql);
+                for param in params.iter() { query = bind_sqlite_param(query, param); }
+                let result = query.execute(sqlite_pool.as_ref()).await.map_err(OxenError::QueryError)?;
+                total_rows_affected += result.rows_affected() as i64;
+            }
+            Ok(QueryResult { rows_affected: total_rows_affected, data: Vec::new(), error: None, elapsed_ms: None })
+        }
+    }
 }
 
 #[derive(Error, Debug)]
@@ -602,6 +742,8 @@ pub struct QueryResult {
     pub rows_affected: i64,
     pub data: Vec<HashMap<String, serde_json::Value>>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub elapsed_ms: Option<u128>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -769,7 +911,7 @@ fn py_to_paramvalue(py: Python, obj: &PyAny) -> PyResult<ParamValue> {
                 }
             }
         }
-        drop(uuid_mod);
+        let _ = uuid_mod;
     }
     // decimal.Decimal
     if let Ok(decimal_mod) = py.import("decimal") {
@@ -781,7 +923,7 @@ fn py_to_paramvalue(py: Python, obj: &PyAny) -> PyResult<ParamValue> {
                 }
             }
         }
-        drop(decimal_mod);
+        let _ = decimal_mod;
     }
     // JSON-like mapping/list fallback
     if let Ok(dict) = obj.downcast::<PyDict>() {
@@ -902,7 +1044,7 @@ fn normalize_placeholders_for_postgres(sql: &str, num_params: usize) -> String {
 }
 
 // ---- Typed binders ----
-fn bind_postgres_param<'q>(mut query: Query<'q, Postgres, PgArguments>, param: &'q ParamValue) -> Query<'q, Postgres, PgArguments> {
+fn bind_postgres_param<'q>(query: Query<'q, Postgres, PgArguments>, param: &'q ParamValue) -> Query<'q, Postgres, PgArguments> {
     match param {
         ParamValue::Null => query.bind::<Option<i32>>(None),
         ParamValue::Bool(v) => query.bind(*v),
@@ -923,7 +1065,7 @@ fn bind_postgres_param<'q>(mut query: Query<'q, Postgres, PgArguments>, param: &
     }
 }
 
-fn bind_mysql_param<'q>(mut query: Query<'q, MySql, MySqlArguments>, param: &'q ParamValue) -> Query<'q, MySql, MySqlArguments> {
+fn bind_mysql_param<'q>(query: Query<'q, MySql, MySqlArguments>, param: &'q ParamValue) -> Query<'q, MySql, MySqlArguments> {
     match param {
         ParamValue::Null => query.bind::<Option<i32>>(None),
         ParamValue::Bool(v) => query.bind(*v),
@@ -944,7 +1086,7 @@ fn bind_mysql_param<'q>(mut query: Query<'q, MySql, MySqlArguments>, param: &'q 
     }
 }
 
-fn bind_sqlite_param<'q>(mut query: Query<'q, Sqlite, SqliteArguments<'q>>, param: &'q ParamValue) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+fn bind_sqlite_param<'q>(query: Query<'q, Sqlite, SqliteArguments<'q>>, param: &'q ParamValue) -> Query<'q, Sqlite, SqliteArguments<'q>> {
     match param {
         ParamValue::Null => query.bind::<Option<i32>>(None),
         ParamValue::Bool(v) => query.bind(*v as i64), // booleans as integers
@@ -967,6 +1109,7 @@ fn bind_sqlite_param<'q>(mut query: Query<'q, Sqlite, SqliteArguments<'q>>, para
 
 // Postgres-specific query execution (typed)
 async fn execute_postgres_query_typed(pool: &PgPool, sql: &str, params: &[ParamValue]) -> Result<QueryResult, OxenError> {
+    let start_time = Instant::now();
     let sql_trimmed = sql.trim().to_lowercase();
     // Normalize placeholders if needed
     let sql_to_run = if sql.contains('?') { normalize_placeholders_for_postgres(sql, params.len()) } else { sql.to_string() };
@@ -991,11 +1134,7 @@ async fn execute_postgres_query_typed(pool: &PgPool, sql: &str, params: &[ParamV
             data.push(map);
         }
         
-        Ok(QueryResult {
-            rows_affected: data.len() as i64,
-            data,
-            error: None,
-        })
+        Ok(QueryResult { rows_affected: data.len() as i64, data, error: None, elapsed_ms: Some(start_time.elapsed().as_millis()) })
     } else {
         let mut query = sqlx::query(&sql_to_run);
         for param in params.iter() {
@@ -1005,16 +1144,31 @@ async fn execute_postgres_query_typed(pool: &PgPool, sql: &str, params: &[ParamV
         let result = query.execute(pool).await
             .map_err(|e| OxenError::QueryError(e))?;
         
-        Ok(QueryResult {
-            rows_affected: result.rows_affected() as i64,
-            data: Vec::new(),
-            error: None,
-        })
+        // If query contains RETURNING, fetch rows instead of only rows_affected
+        if sql_trimmed.contains(" returning ") {
+            let mut query = sqlx::query(&sql_to_run);
+            for param in params.iter() { query = bind_postgres_param(query, param); }
+            let rows = query.fetch_all(pool).await.map_err(OxenError::QueryError)?;
+            let mut data = Vec::new();
+            for row in rows.iter() {
+                let mut map = HashMap::new();
+                for (i, col) in row.columns().iter().enumerate() {
+                    let col_name = col.name();
+                    let value = extract_postgres_value(row, i)?;
+                    map.insert(col_name.to_string(), value);
+                }
+                data.push(map);
+            }
+            Ok(QueryResult { rows_affected: data.len() as i64, data, error: None, elapsed_ms: Some(start_time.elapsed().as_millis()) })
+        } else {
+            Ok(QueryResult { rows_affected: result.rows_affected() as i64, data: Vec::new(), error: None, elapsed_ms: Some(start_time.elapsed().as_millis()) })
+        }
     }
 }
 
 // MySQL-specific query execution (typed)
 async fn execute_mysql_query_typed(pool: &MySqlPool, sql: &str, params: &[ParamValue]) -> Result<QueryResult, OxenError> {
+    let start_time = Instant::now();
     let sql_trimmed = sql.trim().to_lowercase();
     
     if sql_trimmed.starts_with("select") {
@@ -1037,11 +1191,7 @@ async fn execute_mysql_query_typed(pool: &MySqlPool, sql: &str, params: &[ParamV
             data.push(map);
         }
         
-        Ok(QueryResult {
-            rows_affected: data.len() as i64,
-            data,
-            error: None,
-        })
+        Ok(QueryResult { rows_affected: data.len() as i64, data, error: None, elapsed_ms: Some(start_time.elapsed().as_millis()) })
     } else {
         let mut query = sqlx::query(sql);
         for param in params.iter() {
@@ -1051,16 +1201,13 @@ async fn execute_mysql_query_typed(pool: &MySqlPool, sql: &str, params: &[ParamV
         let result = query.execute(pool).await
             .map_err(|e| OxenError::QueryError(e))?;
         
-        Ok(QueryResult {
-            rows_affected: result.rows_affected() as i64,
-            data: Vec::new(),
-            error: None,
-        })
+        Ok(QueryResult { rows_affected: result.rows_affected() as i64, data: Vec::new(), error: None, elapsed_ms: Some(start_time.elapsed().as_millis()) })
     }
 }
 
 // SQLite-specific query execution (typed)
 async fn execute_sqlite_query_typed(pool: &SqlitePool, sql: &str, params: &[ParamValue]) -> Result<QueryResult, OxenError> {
+    let start_time = Instant::now();
     let sql_trimmed = sql.trim().to_lowercase();
     
     if sql_trimmed.starts_with("select") {
@@ -1083,11 +1230,7 @@ async fn execute_sqlite_query_typed(pool: &SqlitePool, sql: &str, params: &[Para
             data.push(map);
         }
         
-        Ok(QueryResult {
-            rows_affected: data.len() as i64,
-            data,
-            error: None,
-        })
+        Ok(QueryResult { rows_affected: data.len() as i64, data, error: None, elapsed_ms: Some(start_time.elapsed().as_millis()) })
     } else {
         let mut query = sqlx::query(sql);
         for param in params.iter() {
@@ -1097,11 +1240,7 @@ async fn execute_sqlite_query_typed(pool: &SqlitePool, sql: &str, params: &[Para
         let result = query.execute(pool).await
             .map_err(|e| OxenError::QueryError(e))?;
         
-        Ok(QueryResult {
-            rows_affected: result.rows_affected() as i64,
-            data: Vec::new(),
-            error: None,
-        })
+        Ok(QueryResult { rows_affected: result.rows_affected() as i64, data: Vec::new(), error: None, elapsed_ms: Some(start_time.elapsed().as_millis()) })
     }
 }
 
@@ -1162,26 +1301,21 @@ fn extract_sqlite_value(row: &sqlx::sqlite::SqliteRow, i: usize) -> Result<serde
 
 // Execute many functions (typed)
 async fn execute_postgres_many_typed(pool: &PgPool, sql: &str, params_list: &[Vec<ParamValue>]) -> Result<QueryResult, OxenError> {
-    let mut total_rows_affected = 0;
-    
+    // Use a single transaction; let sqlx statement cache handle preparation
+    let mut tx = pool.begin().await.map_err(OxenError::QueryError)?;
+    let mut total_rows_affected = 0i64;
+
+    // Normalize placeholders per row length as needed
     for params in params_list.iter() {
         let sql_to_run = if sql.contains('?') { normalize_placeholders_for_postgres(sql, params.len()) } else { sql.to_string() };
         let mut query = sqlx::query(&sql_to_run);
-        for param in params.iter() {
-            query = bind_postgres_param(query, param);
-        }
-        
-        let result = query.execute(pool).await
-            .map_err(|e| OxenError::QueryError(e))?;
-        
+        for param in params.iter() { query = bind_postgres_param(query, param); }
+        let result = query.execute(&mut *tx).await.map_err(OxenError::QueryError)?;
         total_rows_affected += result.rows_affected() as i64;
     }
-    
-    Ok(QueryResult {
-        rows_affected: total_rows_affected,
-        data: Vec::new(),
-        error: None,
-    })
+    tx.commit().await.map_err(OxenError::QueryError)?;
+
+    Ok(QueryResult { rows_affected: total_rows_affected, data: Vec::new(), error: None, elapsed_ms: None })
 }
 
 async fn execute_mysql_many_typed(pool: &MySqlPool, sql: &str, params_list: &[Vec<ParamValue>]) -> Result<QueryResult, OxenError> {
@@ -1199,11 +1333,7 @@ async fn execute_mysql_many_typed(pool: &MySqlPool, sql: &str, params_list: &[Ve
         total_rows_affected += result.rows_affected() as i64;
     }
     
-    Ok(QueryResult {
-        rows_affected: total_rows_affected,
-        data: Vec::new(),
-        error: None,
-    })
+    Ok(QueryResult { rows_affected: total_rows_affected, data: Vec::new(), error: None, elapsed_ms: None })
 }
 
 async fn execute_sqlite_many_typed(pool: &SqlitePool, sql: &str, params_list: &[Vec<ParamValue>]) -> Result<QueryResult, OxenError> {
@@ -1221,11 +1351,7 @@ async fn execute_sqlite_many_typed(pool: &SqlitePool, sql: &str, params_list: &[
         total_rows_affected += result.rows_affected() as i64;
     }
     
-    Ok(QueryResult {
-        rows_affected: total_rows_affected,
-        data: Vec::new(),
-        error: None,
-    })
+    Ok(QueryResult { rows_affected: total_rows_affected, data: Vec::new(), error: None, elapsed_ms: None })
 }
 
 #[pyclass]
@@ -1314,13 +1440,17 @@ impl OxenEngine {
         let pool = runtime.block_on(async {
             match database_type {
                 DatabaseType::Postgres => {
+                    // Enable prepared statement cache for better performance
+                    let mut opts = PgConnectOptions::from_str(&connection_string)?;
+                    // sqlx default is 100; bump to a higher value for ORM workloads
+                    opts = opts.statement_cache_capacity(1024);
                     let pool = PgPoolOptions::new()
                         .max_connections(max_connections)
                         .min_connections(min_connections)
                         .acquire_timeout(std::time::Duration::from_secs(30))
                         .idle_timeout(std::time::Duration::from_secs(300))
                         .max_lifetime(std::time::Duration::from_secs(1800))
-                        .connect(&connection_string)
+                        .connect_with(opts)
                         .await?;
                     Ok(DatabasePool::Postgres(Arc::new(pool)))
                 }
@@ -1419,11 +1549,14 @@ impl OxenEngine {
         // Parse IR and build SQL + typed params
         let ir: QueryIR = serde_json::from_str(&ir_json)
             .map_err(|e| OxenError::SerializationError(e))?;
-        let (sql, params) = build_sql_from_ir(&ir);
-
-        let result = runtime.block_on(async {
-            pool.execute_query(&sql, &params).await
-        })?;
+        // If this is a large insert-many, use chunked path
+        let result = if ir.action.as_deref().unwrap_or("select") == "insert" && ir.rows.as_ref().map(|v| v.len()).unwrap_or(0) > 500 {
+            let chunk_size = 500;
+            runtime.block_on(async { execute_insert_rows_chunked(pool, &ir, chunk_size).await })?
+        } else {
+            let (sql, params) = build_sql_from_ir(&ir);
+            runtime.block_on(async { pool.execute_query(&sql, &params).await })?
+        };
 
         let json_result = serde_json::to_value(result)
             .map_err(|e| OxenError::SerializationError(e))?;
