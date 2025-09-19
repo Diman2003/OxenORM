@@ -145,6 +145,7 @@ cython_debug/
 # Rust
 target/
 Cargo.lock
+tests/
 
 # OS
 .DS_Store
