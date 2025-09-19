@@ -207,3 +207,35 @@ def test_limit_only_and_offset_only(dialect):
     assert "LIMIT 7" in out["sql"]
     out2 = build_sql_json(json.dumps({"dialect": dialect, "table": "users", "select": ["id"], "offset": 11}))
     assert "OFFSET 11" in out2["sql"]
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "mysql", "sqlite"])
+def test_update_and_delete_building(dialect):
+    upd = build_sql_json(
+        json.dumps(
+            {
+                "dialect": dialect,
+                "table": "users",
+                "action": "update",
+                "set": {"name": "Alice", "age": 30},
+                "filters": [{"field": "id", "op": "eq", "value": 1}],
+            }
+        )
+    )
+    assert upd["sql"].startswith("UPDATE") and " SET " in upd["sql"] and " WHERE " in upd["sql"]
+    # First two are SET values (order not guaranteed across languages); third is WHERE id
+    assert set(upd["params"][:2]) == set(["Alice", 30])
+    assert upd["params"][2] == 1
+
+    dele = build_sql_json(
+        json.dumps(
+            {
+                "dialect": dialect,
+                "table": "users",
+                "action": "delete",
+                "filters": [{"field": "id", "op": "eq", "value": 2}],
+            }
+        )
+    )
+    assert dele["sql"].startswith("DELETE FROM") and " WHERE " in dele["sql"]
+    assert dele["params"] == [2]

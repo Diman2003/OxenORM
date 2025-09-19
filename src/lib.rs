@@ -39,6 +39,8 @@ struct QueryIR {
     dialect: String,
     table: String,
     #[serde(default)]
+    action: Option<String>, // select (default) | update | delete
+    #[serde(default)]
     select: Vec<String>,
     #[serde(default)]
     distinct: bool,
@@ -54,6 +56,8 @@ struct QueryIR {
     limit: Option<i64>,
     #[serde(default)]
     offset: Option<i64>,
+    #[serde(default)]
+    set: Option<serde_json::Map<String, serde_json::Value>>, // for update; preserves insertion order
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,18 +142,43 @@ fn build_sql_from_ir(ir: &QueryIR) -> (String, Vec<ParamValue>) {
     let dialect = DialectKind::from_str(&ir.dialect);
     let mut sql = String::new();
     let mut params: Vec<ParamValue> = Vec::new();
+    let action = ir.action.as_deref().unwrap_or("select").to_lowercase();
 
-    // SELECT clause
-    sql.push_str("SELECT ");
-    if ir.distinct { sql.push_str("DISTINCT "); }
-    if ir.select.is_empty() {
-        sql.push('*');
-    } else {
-        let cols: Vec<String> = ir.select.iter().map(|c| dialect.quote_ident(c)).collect();
-        sql.push_str(&cols.join(", "));
+    match action.as_str() {
+        "update" => {
+            sql.push_str("UPDATE ");
+            sql.push_str(&dialect.quote_ident(&ir.table));
+            sql.push_str(" SET ");
+            let mut wrote_any = false;
+            if let Some(set_map) = ir.set.as_ref() {
+                // Iterate in key order to stabilize tests (serde_json::Map preserves insertion order
+                for k in set_map.keys() {
+                    if wrote_any { sql.push_str(", "); }
+                    sql.push_str(&format!("{} = ?", dialect.quote_ident(k)));
+                    let v = set_map.get(k).unwrap();
+                    params.push(json_to_paramvalue_value(v));
+                    wrote_any = true;
+                }
+            }
+            if !wrote_any {
+                sql.push_str("1=1");
+            }
+        }
+        "delete" => {
+            sql.push_str("DELETE FROM ");
+            sql.push_str(&dialect.quote_ident(&ir.table));
+        }
+        _ => {
+            sql.push_str("SELECT ");
+            if ir.distinct { sql.push_str("DISTINCT "); }
+            if ir.select.is_empty() { sql.push('*'); } else {
+                let cols: Vec<String> = ir.select.iter().map(|c| dialect.quote_ident(c)).collect();
+                sql.push_str(&cols.join(", "));
+            }
+            sql.push_str(" FROM ");
+            sql.push_str(&dialect.quote_ident(&ir.table));
+        }
     }
-    sql.push_str(" FROM ");
-    sql.push_str(&dialect.quote_ident(&ir.table));
 
     // JOINS (basic ON left op right)
     if !ir.joins.is_empty() {
@@ -167,6 +196,7 @@ fn build_sql_from_ir(ir: &QueryIR) -> (String, Vec<ParamValue>) {
     // WHERE from filters (AND all for v1)
     if !ir.filters.is_empty() {
         let mut first = true;
+        // For update/delete we may already have SET clause
         sql.push_str(" WHERE ");
         for f in &ir.filters {
             if !first { sql.push_str(" AND "); } else { first = false; }
@@ -277,8 +307,8 @@ fn build_sql_from_ir(ir: &QueryIR) -> (String, Vec<ParamValue>) {
         }
     }
 
-    // ORDER BY
-    if !ir.order_by.is_empty() {
+    // ORDER BY (only applies to SELECT)
+    if action == "select" && !ir.order_by.is_empty() {
         sql.push_str(" ORDER BY ");
         let mut parts: Vec<String> = Vec::new();
         for ob in &ir.order_by {
@@ -289,8 +319,10 @@ fn build_sql_from_ir(ir: &QueryIR) -> (String, Vec<ParamValue>) {
     }
 
     // LIMIT/OFFSET
-    if let Some(lim) = ir.limit { sql.push_str(&format!(" LIMIT {}", lim)); }
-    if let Some(off) = ir.offset { sql.push_str(&format!(" OFFSET {}", off)); }
+    if action == "select" {
+        if let Some(lim) = ir.limit { sql.push_str(&format!(" LIMIT {}", lim)); }
+        if let Some(off) = ir.offset { sql.push_str(&format!(" OFFSET {}", off)); }
+    }
 
     // Postgres placeholder normalization
     if dialect == DialectKind::Postgres {
