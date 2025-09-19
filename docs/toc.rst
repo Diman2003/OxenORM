@@ -9,6 +9,7 @@ Table Of Contents
    getting_started
    reference
    examples
+   query_ir
    contrib
    CHANGELOG
    roadmap

@@ -1,3 +1,92 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install maturin and deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install maturin pytest pytest-asyncio
+      - name: Build Rust extension
+        run: |
+          maturin develop --release
+      - name: Run unit tests (no DB)
+        env:
+          OXEN_RUST_BACKEND: '1'
+        run: |
+          pytest -q tests/test_rust_builder_sql.py tests/test_debug_engine.py tests/test_queryset_debug.py tests/test_queryset_final.py tests/test_queryset_fresh.py
+
+  sqlite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install maturin and deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install maturin pytest pytest-asyncio
+      - name: Build Rust extension
+        run: |
+          maturin develop --release
+      - name: Run sqlite tests
+        env:
+          OXEN_RUST_BACKEND: '1'
+        run: |
+          pytest -q tests/test_sqlite_basic.py
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: oxenorm
+          POSTGRES_PASSWORD: oxenorm
+          POSTGRES_DB: oxenorm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U oxenorm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install maturin and deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install maturin pytest pytest-asyncio
+      - name: Build Rust extension
+        run: |
+          maturin develop --release
+      - name: Wait for Postgres
+        run: |
+          for i in {1..60}; do
+            nc -z localhost 5432 && echo "Postgres is up" && break
+            sleep 2
+          done
+      - name: Run postgres tests
+        env:
+          OXEN_RUST_BACKEND: '1'
+        run: |
+          pytest -q tests/test_postgresql_* 
 name: CI/CD Pipeline
 
 on:

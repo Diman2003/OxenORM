@@ -13,26 +13,23 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 from contextlib import asynccontextmanager
 
-from .backends.base import BaseBackend, DatabaseConfig
-from .backends.sqlite import SQLiteBackend
-from .backends.mysql import MySQLBackend
-from .backends.postgresql import PostgreSQLBackend
+from .engine import create_engine, UnifiedEngine
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class DatabaseInfo:
-    """Information about a database connection."""
+    """Information about a database connection (Rust-backed)."""
     name: str
-    backend: BaseBackend
-    config: DatabaseConfig
+    url: str
+    engine: UnifiedEngine
     is_primary: bool = False
     is_read_only: bool = False
 
 
 class MultiDatabaseManager:
-    """Manager for multiple database backends."""
+    """Manager for multiple Rust-backed database engines."""
     
     def __init__(self):
         self.databases: Dict[str, DatabaseInfo] = {}
@@ -64,15 +61,14 @@ class MultiDatabaseManager:
         if name in self.databases:
             raise ValueError(f"Database '{name}' already exists")
         
-        # Parse URL and create config
-        config = self._parse_url(url, **config_options)
-        backend = self._create_backend(config)
+        # Create unified engine (Rust-backed)
+        engine = create_engine(url, use_rust=True)
         
         # Create database info
         db_info = DatabaseInfo(
             name=name,
-            backend=backend,
-            config=config,
+            url=url,
+            engine=engine,
             is_primary=is_primary,
             is_read_only=is_read_only
         )
@@ -87,57 +83,14 @@ class MultiDatabaseManager:
         if not self.primary_database:
             self.primary_database = name
         
-        logger.info(f"Added database '{name}' ({backend.get_dialect()})")
+        logger.info(f"Added database '{name}' ({url.split(':', 1)[0]})")
         return name
     
-    def _parse_url(self, url: str, **config_options) -> DatabaseConfig:
-        """Parse a database URL and create configuration."""
-        parsed = urlparse(url)
-        
-        # Extract basic connection info
-        config = DatabaseConfig(
-            host=parsed.hostname or "localhost",
-            port=parsed.port or self._get_default_port(parsed.scheme),
-            username=parsed.username or "",
-            password=parsed.password or "",
-            database=parsed.path.lstrip("/") if parsed.path else "",
-            **config_options
-        )
-        
-        # Set database-specific options
-        if parsed.scheme == "sqlite":
-            config.sqlite_path = parsed.path or ":memory:"
-        elif parsed.scheme == "mysql":
-            config.port = config.port or 3306
-        elif parsed.scheme == "postgresql":
-            config.port = config.port or 5432
-        
-        return config
+    # Legacy URL parsing and backend creation removed; UnifiedEngine handles connection strings
     
-    def _get_default_port(self, scheme: str) -> int:
-        """Get default port for database scheme."""
-        defaults = {
-            "sqlite": 0,  # SQLite doesn't use ports
-            "mysql": 3306,
-            "postgresql": 5432,
-            "postgres": 5432
-        }
-        return defaults.get(scheme, 3306)
+    # Default port helper no longer used
     
-    def _create_backend(self, config: DatabaseConfig) -> BaseBackend:
-        """Create appropriate backend based on configuration."""
-        # Determine backend type from connection string
-        conn_str = config.get_connection_string() if hasattr(config, 'get_connection_string') else ""
-        
-        if "sqlite" in conn_str or config.sqlite_path:
-            return SQLiteBackend(config)
-        elif "mysql" in conn_str or config.port == 3306:
-            return MySQLBackend(config)
-        elif "postgresql" in conn_str or config.port == 5432:
-            return PostgreSQLBackend(config)
-        else:
-            # Default to SQLite
-            return SQLiteBackend(config)
+    # Backend factory removed; using UnifiedEngine exclusively
     
     async def initialize(self):
         """Initialize all database backends."""
@@ -147,7 +100,7 @@ class MultiDatabaseManager:
         async with self._lock:
             for name, db_info in self.databases.items():
                 try:
-                    await db_info.backend.initialize()
+                    await db_info.engine.connect()
                     logger.info(f"Initialized database '{name}'")
                 except Exception as e:
                     logger.error(f"Failed to initialize database '{name}': {e}")
@@ -161,7 +114,7 @@ class MultiDatabaseManager:
         async with self._lock:
             for name, db_info in self.databases.items():
                 try:
-                    await db_info.backend.close()
+                    await db_info.engine.disconnect()
                     logger.info(f"Closed database '{name}'")
                 except Exception as e:
                     logger.error(f"Failed to close database '{name}': {e}")
@@ -179,9 +132,9 @@ class MultiDatabaseManager:
         
         return self.databases[name]
     
-    def get_backend(self, name: Optional[str] = None) -> BaseBackend:
-        """Get backend by name or primary database."""
-        return self.get_database(name).backend
+    def get_backend(self, name: Optional[str] = None) -> UnifiedEngine:  # type: ignore
+        """Return the Rust-backed engine for compatibility with old API name."""
+        return self.get_database(name).engine
     
     def list_databases(self) -> List[Dict[str, Any]]:
         """List all databases with their information."""
@@ -189,28 +142,35 @@ class MultiDatabaseManager:
         for name, db_info in self.databases.items():
             databases.append({
                 'name': name,
-                'dialect': db_info.backend.get_dialect(),
+                'dialect': db_info.url.split(':', 1)[0],
                 'is_primary': db_info.is_primary,
                 'is_read_only': db_info.is_read_only,
-                'connection_string': db_info.backend.get_connection_string(),
-                'features': db_info.backend.get_supported_features()
+                'connection_string': db_info.url,
+                'features': []
             })
         return databases
     
     async def execute_on_database(
         self,
         sql: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: Optional[Union[Dict[str, Any], List[Any]]] = None,
         database_name: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Execute a query on a specific database."""
-        backend = self.get_backend(database_name)
-        return await backend.execute(sql, params)
+        db_info = self.get_database(database_name)
+        # Convert params to positional list if dict provided
+        param_list: Optional[List[Any]] = None
+        if isinstance(params, dict):
+            param_list = list(params.values())
+        elif isinstance(params, list):
+            param_list = params
+        result = await db_info.engine.execute_query(sql, param_list)
+        return result.get('data', [])
     
     async def execute_on_all_databases(
         self,
         sql: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: Optional[Union[Dict[str, Any], List[Any]]] = None,
         exclude_read_only: bool = True
     ) -> Dict[str, List[Dict[str, Any]]]:
         """Execute a query on all databases."""
@@ -221,8 +181,13 @@ class MultiDatabaseManager:
                 continue
             
             try:
-                result = await db_info.backend.execute(sql, params)
-                results[name] = result
+                param_list: Optional[List[Any]] = None
+                if isinstance(params, dict):
+                    param_list = list(params.values())
+                elif isinstance(params, list):
+                    param_list = params
+                result = await db_info.engine.execute_query(sql, param_list)
+                results[name] = result.get('data', [])
             except Exception as e:
                 logger.error(f"Failed to execute on database '{name}': {e}")
                 results[name] = []
@@ -232,7 +197,7 @@ class MultiDatabaseManager:
     async def execute_on_read_replicas(
         self,
         sql: str,
-        params: Optional[Dict[str, Any]] = None
+        params: Optional[Union[Dict[str, Any], List[Any]]] = None
     ) -> Dict[str, List[Dict[str, Any]]]:
         """Execute a query on read replicas."""
         results = {}
@@ -240,8 +205,13 @@ class MultiDatabaseManager:
         for name, db_info in self.databases.items():
             if db_info.is_read_only:
                 try:
-                    result = await db_info.backend.execute(sql, params)
-                    results[name] = result
+                    param_list: Optional[List[Any]] = None
+                    if isinstance(params, dict):
+                        param_list = list(params.values())
+                    elif isinstance(params, list):
+                        param_list = params
+                    result = await db_info.engine.execute_query(sql, param_list)
+                    results[name] = result.get('data', [])
                 except Exception as e:
                     logger.error(f"Failed to execute on read replica '{name}': {e}")
                     results[name] = []
@@ -251,16 +221,16 @@ class MultiDatabaseManager:
     @asynccontextmanager
     async def transaction(self, database_name: Optional[str] = None):
         """Get a transaction context for a specific database."""
-        backend = self.get_backend(database_name)
-        async with backend.transaction() as conn:
-            yield conn
+        db_info = self.get_database(database_name)
+        async with db_info.engine.transaction():
+            yield db_info.engine
     
     @asynccontextmanager
     async def connection(self, database_name: Optional[str] = None):
         """Get a connection for a specific database."""
-        backend = self.get_backend(database_name)
-        async with backend.get_connection() as conn:
-            yield conn
+        # UnifiedEngine does not expose raw DB connections; return engine for executing queries
+        db_info = self.get_database(database_name)
+        yield db_info.engine
     
     def switch_primary(self, database_name: str):
         """Switch the primary database."""
@@ -318,40 +288,16 @@ class MultiDatabaseManager:
     async def backup_database(self, database_name: str, backup_path: str):
         """Backup a database."""
         db_info = self.get_database(database_name)
-        backend = db_info.backend
-        
-        if isinstance(backend, SQLiteBackend):
-            # SQLite backup
-            import shutil
-            shutil.copy2(db_info.config.sqlite_path, backup_path)
-        elif isinstance(backend, MySQLBackend):
-            # MySQL backup using mysqldump
-            import subprocess
-            cmd = [
-                'mysqldump',
-                f'--host={db_info.config.host}',
-                f'--port={db_info.config.port}',
-                f'--user={db_info.config.username}',
-                f'--password={db_info.config.password}',
-                db_info.config.database
-            ]
-            with open(backup_path, 'w') as f:
-                subprocess.run(cmd, stdout=f, check=True)
-        elif isinstance(backend, PostgreSQLBackend):
-            # PostgreSQL backup using pg_dump
-            import subprocess
-            cmd = [
-                'pg_dump',
-                f'--host={db_info.config.host}',
-                f'--port={db_info.config.port}',
-                f'--username={db_info.config.username}',
-                f'--dbname={db_info.config.database}',
-                '--no-password'
-            ]
-            with open(backup_path, 'w') as f:
-                subprocess.run(cmd, stdout=f, check=True)
-        
-        logger.info(f"Backed up database '{database_name}' to {backup_path}")
+        # Backup based on URL scheme
+        from urllib.parse import urlparse
+        import shutil
+        parsed = urlparse(db_info.url)
+        scheme = parsed.scheme
+        if scheme == 'sqlite' and parsed.path and parsed.path not in (':memory:', ''):
+            shutil.copy2(parsed.path, backup_path)
+            logger.info(f"Backed up SQLite database '{database_name}' from {parsed.path} to {backup_path}")
+        else:
+            logger.warning("Backup for non-SQLite databases is not automated; use vendor tools (mysqldump/pg_dump).")
     
     def get_optimal_database(self, operation: str = "read") -> str:
         """Get the optimal database for an operation."""

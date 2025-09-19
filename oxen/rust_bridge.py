@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Any
 
 try:
     from oxen_engine import OxenEngine as RustOxenEngine
+    from oxen_engine import build_sql_json as _rust_build_sql_json
     RUST_AVAILABLE = True
 except ImportError:
     RUST_AVAILABLE = False
@@ -45,6 +46,16 @@ class OxenEngine:
         else:
             result = await loop.run_in_executor(None, self._rust_engine.execute_query, query)
         return result
+
+    async def execute_ir(self, ir: Dict[str, Any]) -> Dict[str, Any]:
+        """Build SQL from IR using Rust and execute via the engine."""
+        if not RUST_AVAILABLE:
+            raise ImportError("Rust backend not available. Please build with: cargo build")
+        import json as _json
+        built = _rust_build_sql_json(_json.dumps(ir))
+        query: str = built.get("sql")
+        params: List[Any] = built.get("params") or []
+        return await self.execute_query(query, params)
     
     async def execute_many(self, query: str, params_list: List[List[Any]]) -> Dict[str, Any]:
         """Execute a query with multiple parameter sets"""

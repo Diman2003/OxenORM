@@ -1,25 +1,10 @@
 """
-OxenORM Database Backends
+Deprecated: Python backends have been removed.
 
-This package provides database-specific backends for OxenORM, including:
-- SQLite backend
-- MySQL backend  
-- PostgreSQL backend
-- Database-specific optimizations
-- Connection pooling
-- Query optimization
+All database I/O is handled by the Rust engine (`oxen_engine`) and
+the unified engine in `oxen.engine`.
+
+This package remains only as a stub for backward compatibility in imports.
 """
 
-from .base import BaseBackend, ConnectionPool, DatabaseConfig
-from .sqlite import SQLiteBackend
-from .mysql import MySQLBackend
-from .postgresql import PostgreSQLBackend
-
-__all__ = [
-    'BaseBackend',
-    'ConnectionPool', 
-    'DatabaseConfig',
-    'SQLiteBackend',
-    'MySQLBackend',
-    'PostgreSQLBackend'
-] 
+__all__ = []
