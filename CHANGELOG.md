@@ -5,6 +5,15 @@ All notable changes to OxenORM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- Breaking: Removed Python database backends in `oxen/backends` (sqlite, mysql, postgresql). All DB I/O now routes exclusively through the Rust engine (`oxen_engine`) and unified engine in `oxen/engine.py`.
+- Feature: Rust dialect-aware Query IR builder for SELECT/INSERT/UPDATE/DELETE with joins, filters, order/group, DISTINCT, limit/offset, and ILIKE emulation.
+- Python `QuerySet` now constructs IR and uses Rust builder for query generation and execution; `ExistsQuery` routed to IR.
+- Added `execute_ir_json` on Rust `OxenEngine` and Python shim `execute_ir`.
+- Docs: Added `docs/query_ir.rst` and included in TOC.
+- Guidance: Replace any direct usage of `oxen.backends.sqlite/mysql/postgresql` with `oxen.engine.create_engine` or the async `connect(...)` helper.
+
 ## [0.2.0] - 2025-09-18
 
 ### Added
