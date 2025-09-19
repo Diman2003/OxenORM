@@ -58,6 +58,8 @@ struct QueryIR {
     offset: Option<i64>,
     #[serde(default)]
     set: Option<serde_json::Map<String, serde_json::Value>>, // for update; preserves insertion order
+    #[serde(default)]
+    rows: Option<Vec<serde_json::Map<String, serde_json::Value>>>, // for insert-many
 }
 
 #[derive(Debug, Deserialize)]
@@ -145,6 +147,57 @@ fn build_sql_from_ir(ir: &QueryIR) -> (String, Vec<ParamValue>) {
     let action = ir.action.as_deref().unwrap_or("select").to_lowercase();
 
     match action.as_str() {
+        "insert" => {
+            sql.push_str("INSERT INTO ");
+            sql.push_str(&dialect.quote_ident(&ir.table));
+
+            // Determine columns and values
+            if let Some(rows) = ir.rows.as_ref() {
+                // Multiple rows insert
+                if rows.is_empty() {
+                    // Fallback to DEFAULT VALUES
+                    sql.push_str(" DEFAULT VALUES");
+                } else {
+                    // Use keys from first row as column order
+                    let first = &rows[0];
+                    let columns: Vec<String> = first.keys().map(|k| dialect.quote_ident(k)).collect();
+                    sql.push_str(" (");
+                    sql.push_str(&columns.join(", "));
+                    sql.push_str(") VALUES ");
+                    for (i, row) in rows.iter().enumerate() {
+                        if i > 0 { sql.push_str(", "); }
+                        sql.push('(');
+                        let mut first_val = true;
+                        for k in first.keys() {
+                            if !first_val { sql.push_str(", "); } else { first_val = false; }
+                            sql.push('?');
+                            let v = row.get(k).unwrap_or(&serde_json::Value::Null);
+                            params.push(json_to_paramvalue_value(v));
+                        }
+                        sql.push(')');
+                    }
+                }
+            } else if let Some(set_map) = ir.set.as_ref() {
+                if set_map.is_empty() {
+                    sql.push_str(" DEFAULT VALUES");
+                } else {
+                    let columns: Vec<String> = set_map.keys().map(|k| dialect.quote_ident(k)).collect();
+                    sql.push_str(" (");
+                    sql.push_str(&columns.join(", "));
+                    sql.push_str(") VALUES (");
+                    for (i, k) in set_map.keys().enumerate() {
+                        if i > 0 { sql.push_str(", "); }
+                        sql.push('?');
+                        let v = set_map.get(k).unwrap();
+                        params.push(json_to_paramvalue_value(v));
+                    }
+                    sql.push(')');
+                }
+            } else {
+                // No values provided
+                sql.push_str(" DEFAULT VALUES");
+            }
+        }
         "update" => {
             sql.push_str("UPDATE ");
             sql.push_str(&dialect.quote_ident(&ir.table));
@@ -188,7 +241,7 @@ fn build_sql_from_ir(ir: &QueryIR) -> (String, Vec<ParamValue>) {
             sql.push_str(jt_sql);
             sql.push_str(&dialect.quote_ident(&j.table));
             sql.push_str(" ON ");
-            let op = match j.on.op.as_str() { "=\n" => "=", "<>"|"!=" => "<>", ">" => ">", ">=" => ">=", "<" => "<", "<=" => "<=", _ => "=" };
+            let op = match j.on.op.to_lowercase().as_str() { "eq" => "=", "<>"|"!=" => "<>", ">" => ">", ">=" => ">=", "<" => "<", "<=" => "<=", _ => "=" };
             sql.push_str(&format!("{} {} {}", dialect.quote_ident(&j.on.left), op, dialect.quote_ident(&j.on.right)));
         }
     }
@@ -1179,6 +1232,29 @@ impl OxenEngine {
         let json_result = serde_json::to_value(result)
             .map_err(|e| OxenError::SerializationError(e))?;
         
+        json_to_py_object(py, json_result)
+    }
+
+    fn execute_ir_json(&self, py: Python, ir_json: String) -> PyResult<PyObject> {
+        if !self.is_connected {
+            return Err(OxenError::NotConnected.into());
+        }
+
+        let pool = self.pool.as_ref().ok_or(OxenError::NotConnected)?;
+        let runtime = self.runtime.clone();
+
+        // Parse IR and build SQL + typed params
+        let ir: QueryIR = serde_json::from_str(&ir_json)
+            .map_err(|e| OxenError::SerializationError(e))?;
+        let (sql, params) = build_sql_from_ir(&ir);
+
+        let result = runtime.block_on(async {
+            pool.execute_query(&sql, &params).await
+        })?;
+
+        let json_result = serde_json::to_value(result)
+            .map_err(|e| OxenError::SerializationError(e))?;
+
         json_to_py_object(py, json_result)
     }
 
