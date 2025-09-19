@@ -807,55 +807,19 @@ class UpdateQuery(AwaitableQuery):
     
     async def _execute(self) -> int:
         """Execute the update query and return number of rows affected."""
-        # Get database connection
         db = self._choose_db()
         if not db:
             raise OperationalError("No database connection available")
-        
-        # Build conditions from filters with proper field lookup handling
+
+        # Gather conditions
         conditions = {}
         for q_obj in self._q_objects:
-            # Handle Q objects properly
             if hasattr(q_obj, 'filters'):
-                # Process each filter with field lookup support
-                for key, value in q_obj.filters.items():
-                    if '__' in key:
-                        field_name, lookup = key.split('__', 1)
-                        if lookup == 'lt':
-                            conditions[field_name] = f"< {value}"
-                        elif lookup == 'lte':
-                            conditions[field_name] = f"<= {value}"
-                        elif lookup == 'gt':
-                            conditions[field_name] = f"> {value}"
-                        elif lookup == 'gte':
-                            conditions[field_name] = f">= {value}"
-                        elif lookup == 'in':
-                            conditions[field_name] = value
-                        else:
-                            # Unknown lookup, treat as exact match
-                            conditions[field_name] = value
-                    else:
-                        conditions[key] = value
+                conditions.update(q_obj.filters)
             elif hasattr(q_obj, 'children'):
                 for child in q_obj.children:
                     if hasattr(child, 'filters'):
-                        for key, value in child.filters.items():
-                            if '__' in key:
-                                field_name, lookup = key.split('__', 1)
-                                if lookup == 'lt':
-                                    conditions[field_name] = f"< {value}"
-                                elif lookup == 'lte':
-                                    conditions[field_name] = f"<= {value}"
-                                elif lookup == 'gt':
-                                    conditions[field_name] = f"> {value}"
-                                elif lookup == 'gte':
-                                    conditions[field_name] = f">= {value}"
-                                elif lookup == 'in':
-                                    conditions[field_name] = value
-                                else:
-                                    conditions[field_name] = value
-                            else:
-                                conditions[key] = value
+                        conditions.update(child.filters)
                     elif isinstance(child, dict):
                         conditions.update(child)
             elif isinstance(q_obj, dict):
@@ -865,51 +829,45 @@ class UpdateQuery(AwaitableQuery):
                     conditions.update(dict(q_obj))
                 except:
                     pass
-        
-        # Generate SQL manually for complex conditions
-        quoted_table = db._quote_identifier(self.model._meta.table_name)
-        
-        # Build SET clause
-        set_clauses = []
-        params = []
-        for key, value in self._update_data.items():
-            quoted_key = db._quote_identifier(key)
-            set_clauses.append(f"{quoted_key} = ?")
-            
-            # Convert Decimal to float for SQLite compatibility
-            if hasattr(value, 'as_tuple'):  # Decimal
-                params.append(float(value))
-            else:
-                params.append(value)
-        
-        sql = f"UPDATE {quoted_table} SET {', '.join(set_clauses)}"
-        
-        # Build WHERE clause if conditions exist
-        if conditions:
-            where_clauses = []
-            for key, value in conditions.items():
-                quoted_key = db._quote_identifier(key)
-                if isinstance(value, str) and value.startswith(('<', '<=', '>', '>=')):
-                    # Handle comparison operators
-                    operator, val = value.split(' ', 1)
-                    where_clauses.append(f"{quoted_key} {operator} ?")
-                    params.append(val)
-                elif isinstance(value, (list, tuple)):
-                    # Handle IN clause
-                    placeholders = ', '.join(['?' for _ in value])
-                    where_clauses.append(f"{quoted_key} IN ({placeholders})")
-                    params.extend(value)
+
+        dialect = 'postgres' if 'postgresql' in getattr(db, 'connection_string', '').lower() else (
+            'mysql' if 'mysql' in getattr(db, 'connection_string', '').lower() else 'sqlite'
+        )
+        # Convert filters
+        filters = []
+        for key, value in conditions.items():
+            if '__' in key:
+                field_name, lookup = key.split('__', 1)
+                if lookup == 'startswith':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"{value}%"})
+                elif lookup == 'endswith':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"%{value}"})
+                elif lookup == 'contains':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"%{value}%"})
+                elif lookup in ('lt','lte','gt','gte','in','ne'):
+                    filters.append({'field': field_name, 'op': lookup, 'value': value})
                 else:
-                    # Handle exact match
-                    where_clauses.append(f"{quoted_key} = ?")
-                    params.append(value)
-            
-            if where_clauses:
-                sql += f" WHERE {' AND '.join(where_clauses)}"
-        
-        # Execute the update query
-        result = await db.execute_query(sql, params)
-        
+                    filters.append({'field': field_name, 'op': 'eq', 'value': value})
+            else:
+                filters.append({'field': key, 'op': 'eq', 'value': value})
+        # Build IR
+        ir = {
+            'dialect': dialect,
+            'table': self.model._meta.table_name,
+            'action': 'update',
+            'set': self._update_data,
+            'filters': filters,
+        }
+        try:
+            from oxen_engine import build_sql_json
+            import json as _json
+            built = build_sql_json(_json.dumps(ir))
+            query = built.get('sql')
+            params = built.get('params')
+        except Exception:
+            raise OperationalError("Rust IR builder unavailable for update")
+
+        result = await db.execute_query(query, params if params else None)
         if result.get('error') is None:
             return result.get('rows_affected', 0)
         else:
@@ -931,90 +889,65 @@ class DeleteQuery(AwaitableQuery):
     
     async def _execute(self) -> int:
         """Execute the delete query and return the number of deleted records."""
-        # Get database connection
         db = self._choose_db()
         if not db:
             raise OperationalError("No database connection available")
-        
-        # Build conditions from filters
+
+        # Gather conditions
         conditions = {}
         for q_obj in self._q_objects:
-            # Handle Q objects properly
             if hasattr(q_obj, 'filters'):
-                # This is a Q object with filters
                 conditions.update(q_obj.filters)
             elif hasattr(q_obj, 'children'):
-                # This is a Q object with children
                 for child in q_obj.children:
                     if hasattr(child, 'filters'):
                         conditions.update(child.filters)
                     elif isinstance(child, dict):
                         conditions.update(child)
             elif isinstance(q_obj, dict):
-                # This is a simple dict
                 conditions.update(q_obj)
             else:
-                # Try to convert to dict
                 try:
                     conditions.update(dict(q_obj))
                 except:
-                    # Skip if can't convert
                     pass
-        
-        # Build the DELETE query with proper field lookup processing
-        query = f"DELETE FROM {self.model._meta.table_name}"
-        params = []
-        
-        # Add WHERE clause if conditions exist
-        if conditions:
-            where_clauses = []
-            for key, value in conditions.items():
-                # Handle field lookups like age__lt
-                if '__' in key:
-                    field_name, lookup = key.split('__', 1)
-                    if lookup == 'lt':
-                        where_clauses.append(f"{field_name} < ?")
-                        params.append(value)
-                    elif lookup == 'lte':
-                        where_clauses.append(f"{field_name} <= ?")
-                        params.append(value)
-                    elif lookup == 'gt':
-                        where_clauses.append(f"{field_name} > ?")
-                        params.append(value)
-                    elif lookup == 'gte':
-                        where_clauses.append(f"{field_name} >= ?")
-                        params.append(value)
-                    elif lookup == 'startswith':
-                        where_clauses.append(f"{field_name} LIKE ?")
-                        params.append(f"{value}%")
-                    elif lookup == 'endswith':
-                        where_clauses.append(f"{field_name} LIKE ?")
-                        params.append(f"%{value}")
-                    elif lookup == 'contains':
-                        where_clauses.append(f"{field_name} LIKE ?")
-                        params.append(f"%{value}%")
-                    elif lookup == 'in':
-                        if isinstance(value, (list, tuple)):
-                            placeholders = ', '.join(['?' for _ in value])
-                            where_clauses.append(f"{field_name} IN ({placeholders})")
-                            params.extend(value)
-                        else:
-                            where_clauses.append(f"{field_name} IN (?)")
-                            params.append(value)
-                    else:
-                        # Unknown lookup, treat as exact match
-                        where_clauses.append(f"{field_name} = ?")
-                        params.append(value)
+
+        dialect = 'postgres' if 'postgresql' in getattr(db, 'connection_string', '').lower() else (
+            'mysql' if 'mysql' in getattr(db, 'connection_string', '').lower() else 'sqlite'
+        )
+        filters = []
+        for key, value in conditions.items():
+            if '__' in key:
+                field_name, lookup = key.split('__', 1)
+                if lookup == 'startswith':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"{value}%"})
+                elif lookup == 'endswith':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"%{value}"})
+                elif lookup == 'contains':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"%{value}%"})
+                elif lookup in ('lt','lte','gt','gte','in','ne'):
+                    filters.append({'field': field_name, 'op': lookup, 'value': value})
                 else:
-                    where_clauses.append(f"{key} = ?")
-                    params.append(value)
-            
-            if where_clauses:
-                query += " WHERE " + " AND ".join(where_clauses)
-        
-        # Execute the delete query
+                    filters.append({'field': field_name, 'op': 'eq', 'value': value})
+            else:
+                filters.append({'field': key, 'op': 'eq', 'value': value})
+
+        ir = {
+            'dialect': dialect,
+            'table': self.model._meta.table_name,
+            'action': 'delete',
+            'filters': filters,
+        }
+        try:
+            from oxen_engine import build_sql_json
+            import json as _json
+            built = build_sql_json(_json.dumps(ir))
+            query = built.get('sql')
+            params = built.get('params')
+        except Exception:
+            raise OperationalError("Rust IR builder unavailable for delete")
+
         result = await db.execute_query(query, params if params else None)
-        
         if result.get('error') is None:
             return result.get('rows_affected', 0)
         else:
