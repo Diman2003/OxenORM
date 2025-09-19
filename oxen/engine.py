@@ -556,11 +556,19 @@ class UnifiedEngine:
                 else:
                     converted_values.append(str(value))  # SQLite as string
             elif isinstance(value, dict):  # JSON field
-                import json
-                converted_values.append(json.dumps(value))
+                if 'postgresql' in self.connection_string.lower():
+                    # Pass native mapping for typed JSON binding in Rust
+                    converted_values.append(value)
+                else:
+                    import json
+                    converted_values.append(json.dumps(value))
             elif isinstance(value, list):  # Array field
-                import json
-                converted_values.append(json.dumps(value))
+                if 'postgresql' in self.connection_string.lower():
+                    # Pass native list for typed array binding in Rust
+                    converted_values.append(value)
+                else:
+                    import json
+                    converted_values.append(json.dumps(value))
             else:
                 converted_values.append(value)
         
@@ -573,6 +581,9 @@ class UnifiedEngine:
         sql = self._generate_insert_sql(table_name, columns, placeholders)
         
         result = await self.execute_query(sql, converted_values)
+        # Normalize return to include inserted id when available (Postgres)
+        if 'data' not in result:
+            result['data'] = {}
         return result
     
     async def insert_many(self, table_name: str, records: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -604,11 +615,17 @@ class UnifiedEngine:
                     else:
                         converted_record[key] = str(value)  # SQLite as string
                 elif isinstance(value, dict):  # JSON field
-                    import json
-                    converted_record[key] = json.dumps(value)
+                    if 'postgresql' in self.connection_string.lower():
+                        converted_record[key] = value
+                    else:
+                        import json
+                        converted_record[key] = json.dumps(value)
                 elif isinstance(value, list):  # Array field
-                    import json
-                    converted_record[key] = json.dumps(value)
+                    if 'postgresql' in self.connection_string.lower():
+                        converted_record[key] = value
+                    else:
+                        import json
+                        converted_record[key] = json.dumps(value)
                 else:
                     converted_record[key] = value
             converted_records.append(converted_record)

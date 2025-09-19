@@ -199,9 +199,8 @@ class DateTimeField(Field):
     def to_db_value(self, value: Any) -> Any:
         if value is None:
             return None
-        if isinstance(value, datetime):
-            return value.isoformat()
-        return str(value)
+        # Preserve native datetime object so the engine/Rust binder can map types per dialect
+        return value
     
     def from_db_value(self, value: Any) -> Any:
         if value is None:
@@ -232,9 +231,8 @@ class DateField(Field):
     def to_db_value(self, value: Any) -> Any:
         if value is None:
             return None
-        if isinstance(value, date):
-            return value.isoformat()
-        return str(value)
+        # Preserve native date object for proper typed binding
+        return value
     
     def from_db_value(self, value: Any) -> Any:
         if value is None:
@@ -263,9 +261,8 @@ class TimeField(Field):
     def to_db_value(self, value: Any) -> Any:
         if value is None:
             return None
-        if isinstance(value, time):
-            return value.isoformat()
-        return str(value)
+        # Preserve native time object for proper typed binding
+        return value
     
     def from_db_value(self, value: Any) -> Any:
         if value is None:
@@ -330,7 +327,8 @@ class JSONField(Field):
     def to_db_value(self, value: Any) -> Any:
         if value is None:
             return None
-        return json.dumps(value)
+        # Keep Python dict/list so the engine can bind JSON natively (e.g., Postgres JSONB)
+        return value
     
     def from_db_value(self, value: Any) -> Any:
         if value is None:

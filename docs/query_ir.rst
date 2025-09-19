@@ -29,7 +29,7 @@ Required:
 
 Optional:
 
-- ``action``: ``select`` (default) | ``update`` | ``delete``
+- ``action``: ``select`` (default) | ``insert`` | ``update`` | ``delete``
 - ``select``: list[str]
 - ``distinct``: bool
 - ``joins``: list of ``{ join_type, table, on: { left, op, right } }``
@@ -39,9 +39,12 @@ Optional:
 - ``limit``: int
 - ``offset``: int
 - ``set``: object map of column -> value (for update)
+- ``rows``: list[object] (for insert-many)
 
 Supported ops: ``eq`` (default), ``ne``, ``lt``, ``lte``, ``gt``, ``gte``,
-``like``, ``ilike`` (emulated on MySQL/SQLite), ``in`` (array values)
+``like``, ``ilike`` (emulated on MySQL/SQLite), ``contains``, ``icontains``,
+``startswith``, ``istartswith``, ``endswith``, ``iendswith``, ``in`` (array values),
+``not_in``/``nin`` (array values), ``between`` (2-value array), ``isnull``, ``notnull``
 
 Examples
 ========
@@ -79,6 +82,9 @@ Joins and OR groups:
         "joins": [
             {"join_type": "left", "table": "users",
              "on": {"left": "orders.user_id", "op": "=", "right": "users.id"}},
+            # Join ON a constant value
+            {"join_type": "inner", "table": "regions",
+             "on": {"left": "users.region_id", "op": "=", "right_value": 5}},
         ],
         "groups": [
             {"kind": "or", "filters": [
@@ -98,7 +104,7 @@ Updates and Deletes:
         "dialect": "sqlite",
         "table": "users",
         "action": "update",
-        "set": {"name": "Alice", "age": 30},
+        "set": {"name": "Alice", "age": 30, "tags": ["pro", "beta"]},
         "filters": [{"field": "id", "op": "eq", "value": 1}],
     }
     out = build_sql_json(json.dumps(ir))
@@ -125,5 +131,8 @@ Notes
 - ILIKE is emulated on MySQL/SQLite via ``LOWER(col) LIKE LOWER(?)``.
 - Postgres placeholders use ``$1..$n``; MySQL/SQLite use ``?``.
 - Dotted identifiers (``table.column``) are quoted safely per dialect.
+- JSON/arrays:
+  - PostgreSQL binds JSON and arrays using native types.
+  - MySQL/SQLite store arrays/JSON as JSON text; conversion happens in the Rust binder.
 
 

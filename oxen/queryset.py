@@ -705,8 +705,8 @@ class QuerySet(AwaitableQuery[MODEL]):
                     # Handle simple window functions
                     select_fields.append(f"{window_func} AS {alias}")
         
-        # Build CTE part if CTEs exist
-        cte_part = ""
+        # Build CTE part if CTEs exist (string without leading WITH)
+        with_sql = ""
         if hasattr(self, '_ctes') and self._ctes:
             cte_clauses = []
             for cte in self._ctes:
@@ -723,8 +723,7 @@ class QuerySet(AwaitableQuery[MODEL]):
                 
                 recursive_keyword = "RECURSIVE " if recursive else ""
                 cte_clauses.append(f"{recursive_keyword}{cte_name} AS ({cte_sql})")
-            
-            cte_part = "WITH " + ", ".join(cte_clauses) + " "
+            with_sql = ", ".join(cte_clauses)
         
         # Build IR for Rust builder
         dialect = 'postgres' if 'postgresql' in getattr(db, 'connection_string', '').lower() else (
@@ -761,6 +760,8 @@ class QuerySet(AwaitableQuery[MODEL]):
             'limit': self._limit,
             'offset': self._offset,
         }
+        if with_sql:
+            ir['with_sql'] = with_sql
 
         # Use Rust builder
         try:

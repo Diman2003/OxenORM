@@ -67,7 +67,7 @@ async def test_postgresql_extensions():
             print(f"⚠️  PostGIS extension warning: {postgis_result.get('error')}")
         
         # Test CRUD operations with advanced field types
-        await test_advanced_crud_operations(engine)
+        await _advanced_crud_operations(engine)
         
     except Exception as e:
         print(f"❌ PostgreSQL extensions test failed: {str(e)}")
@@ -79,7 +79,7 @@ async def test_postgresql_extensions():
             pass
 
 
-async def test_advanced_crud_operations(engine):
+async def _advanced_crud_operations(engine):
     """Test CRUD operations with PostgreSQL-specific field types."""
     print("🔄 Testing advanced CRUD operations...")
     

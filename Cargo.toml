@@ -11,9 +11,9 @@ name = "oxen_engine"
 crate-type = ["cdylib"]
 
 [dependencies]
-# PyO3 for Python bindings
-pyo3 = { version = "0.19", features = ["extension-module"] }
-pyo3-asyncio = { version = "0.19", features = ["tokio-runtime"] }
+# PyO3 for Python bindings (update to fix local link/runtime issues)
+pyo3 = { version = "0.20", features = ["extension-module"] }
+pyo3-asyncio = { version = "0.20", features = ["tokio-runtime"] }
 
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }

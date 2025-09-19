@@ -60,6 +60,8 @@ struct QueryIR {
     set: Option<serde_json::Map<String, serde_json::Value>>, // for update; preserves insertion order
     #[serde(default)]
     rows: Option<Vec<serde_json::Map<String, serde_json::Value>>>, // for insert-many
+    #[serde(default)]
+    with_sql: Option<String>, // optional CTE prefix without leading WITH
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,7 +87,14 @@ struct JoinIR {
 }
 
 #[derive(Debug, Deserialize)]
-struct JoinOnIR { left: String, op: String, right: String }
+struct JoinOnIR {
+    left: String,
+    op: String,
+    #[serde(default)]
+    right: Option<String>,
+    #[serde(default)]
+    right_value: Option<serde_json::Value>,
+}
 
 #[derive(Debug, Deserialize)]
 struct GroupIR { #[serde(default)] kind: Option<String>, #[serde(default)] filters: Vec<FilterIR> }
@@ -103,6 +112,14 @@ impl DialectKind {
     }
 
     fn quote_ident(&self, ident: &str) -> String {
+        // Support raw expressions, wildcard and dotted paths
+        if ident == "*" { return "*".to_string(); }
+        if ident.ends_with(".*") {
+            let is_mysql = matches!(self, DialectKind::MySQL);
+            let (prefix, _) = ident.split_at(ident.len()-2);
+            let quoted_prefix = if is_mysql { format!("`{}`", prefix.replace('`', "``")) } else { format!("\"{}\"", prefix.replace('"', "\"")) };
+            return format!("{}.{}", quoted_prefix, "*");
+        }
         // Support dotted paths: schema.table or table.column
         if ident.contains('(') || ident.contains(')') || ident.contains(' ') {
             // Treat as raw expression
@@ -145,6 +162,15 @@ fn build_sql_from_ir(ir: &QueryIR) -> (String, Vec<ParamValue>) {
     let mut sql = String::new();
     let mut params: Vec<ParamValue> = Vec::new();
     let action = ir.action.as_deref().unwrap_or("select").to_lowercase();
+
+    // Optional CTE prefix
+    if let Some(with_sql) = ir.with_sql.as_ref() {
+        if !with_sql.trim().is_empty() {
+            sql.push_str("WITH ");
+            sql.push_str(with_sql);
+            sql.push(' ');
+        }
+    }
 
     match action.as_str() {
         "insert" => {
@@ -242,7 +268,16 @@ fn build_sql_from_ir(ir: &QueryIR) -> (String, Vec<ParamValue>) {
             sql.push_str(&dialect.quote_ident(&j.table));
             sql.push_str(" ON ");
             let op = match j.on.op.to_lowercase().as_str() { "eq" => "=", "<>"|"!=" => "<>", ">" => ">", ">=" => ">=", "<" => "<", "<=" => "<=", _ => "=" };
-            sql.push_str(&format!("{} {} {}", dialect.quote_ident(&j.on.left), op, dialect.quote_ident(&j.on.right)));
+            let left = dialect.quote_ident(&j.on.left);
+            if let Some(right_ident) = &j.on.right {
+                sql.push_str(&format!("{} {} {}", left, op, dialect.quote_ident(right_ident)));
+            } else if let Some(rv) = &j.on.right_value {
+                sql.push_str(&format!("{} {} ?", left, op));
+                params.push(json_to_paramvalue_value(rv));
+            } else {
+                // Fallback: treat as tautology to avoid invalid SQL
+                sql.push_str("1=1");
+            }
         }
     }
 
@@ -277,9 +312,19 @@ fn build_sql_from_ir(ir: &QueryIR) -> (String, Vec<ParamValue>) {
                         params.push(json_to_paramvalue_value(&f.value));
                     }
                 }
-                "like" | "ilike" => {
+                "like" | "ilike" | "contains" | "icontains" | "startswith" | "istartswith" | "endswith" | "iendswith" => {
                     // Case-insensitive match: Postgres supports ILIKE, others emulate
-                    if op == "ilike" {
+                    let (use_ilike, value) = if matches!(op.as_str(), "contains"|"icontains"|"startswith"|"istartswith"|"endswith"|"iendswith") {
+                        // Build pattern value
+                        let s = match &f.value { serde_json::Value::String(s) => s.clone(), _ => f.value.to_string() };
+                        let pat = match op.as_str() {
+                            "contains"|"icontains" => format!("%{}%", s),
+                            "startswith"|"istartswith" => format!("{}%", s),
+                            _ => format!("%{}", s),
+                        };
+                        (op.starts_with('i'), serde_json::Value::String(pat))
+                    } else { (op == "ilike", f.value.clone()) };
+                    if use_ilike {
                         match dialect {
                             DialectKind::Postgres => sql.push_str(&format!("{} ILIKE ?", field)),
                             _ => sql.push_str(&format!("LOWER({}) LIKE LOWER(?)", field)),
@@ -287,7 +332,44 @@ fn build_sql_from_ir(ir: &QueryIR) -> (String, Vec<ParamValue>) {
                     } else {
                         sql.push_str(&format!("{} LIKE ?", field));
                     }
-                    params.push(json_to_paramvalue_value(&f.value));
+                    params.push(json_to_paramvalue_value(&value));
+                }
+                "isnull" => { sql.push_str(&format!("{} IS NULL", field)); }
+                "notnull" => { sql.push_str(&format!("{} IS NOT NULL", field)); }
+                "between" => {
+                    if let serde_json::Value::Array(arr) = &f.value {
+                        if arr.len() >= 2 {
+                            sql.push_str(&format!("{} BETWEEN ? AND ?", field));
+                            params.push(json_to_paramvalue_value(&arr[0]));
+                            params.push(json_to_paramvalue_value(&arr[1]));
+                        } else {
+                            sql.push_str(&format!("{} = ?", field));
+                            if let Some(v0) = arr.get(0) { params.push(json_to_paramvalue_value(v0)); } else { params.push(ParamValue::Null); }
+                        }
+                    } else {
+                        sql.push_str(&format!("{} = ?", field));
+                        params.push(json_to_paramvalue_value(&f.value));
+                    }
+                }
+                "not_in" | "nin" => {
+                    if let serde_json::Value::Array(arr) = &f.value {
+                        if arr.is_empty() {
+                            sql.push_str("1=1"); // NOT IN () -> always true
+                        } else {
+                            sql.push_str(&format!("{} NOT IN ({} )", field, {
+                                let mut placeholders = String::new();
+                                for (i, v) in arr.iter().enumerate() {
+                                    if i > 0 { placeholders.push_str(", "); }
+                                    placeholders.push('?');
+                                    params.push(json_to_paramvalue_value(v));
+                                }
+                                placeholders
+                            }));
+                        }
+                    } else {
+                        sql.push_str(&format!("{} <> ?", field));
+                        params.push(json_to_paramvalue_value(&f.value));
+                    }
                 }
                 "ne" | "<>" => {
                     sql.push_str(&format!("{} <> ?", field));
@@ -336,16 +418,53 @@ fn build_sql_from_ir(ir: &QueryIR) -> (String, Vec<ParamValue>) {
                                 params.push(json_to_paramvalue_value(&f.value));
                             }
                         }
-                        "like" | "ilike" => {
-                            if op == "ilike" {
+                        "like" | "ilike" | "contains" | "icontains" | "startswith" | "istartswith" | "endswith" | "iendswith" => {
+                            let (use_ilike, value) = if matches!(op.as_str(), "contains"|"icontains"|"startswith"|"istartswith"|"endswith"|"iendswith") {
+                                let s = match &f.value { serde_json::Value::String(s) => s.clone(), _ => f.value.to_string() };
+                                let pat = match op.as_str() {
+                                    "contains"|"icontains" => format!("%{}%", s),
+                                    "startswith"|"istartswith" => format!("{}%", s),
+                                    _ => format!("%{}", s),
+                                };
+                                (op.starts_with('i'), serde_json::Value::String(pat))
+                            } else { (op == "ilike", f.value.clone()) };
+                            if use_ilike {
                                 match dialect {
                                     DialectKind::Postgres => sql.push_str(&format!("{} ILIKE ?", field)),
                                     _ => sql.push_str(&format!("LOWER({}) LIKE LOWER(?)", field)),
                                 }
-                            } else {
-                                sql.push_str(&format!("{} LIKE ?", field));
-                            }
-                            params.push(json_to_paramvalue_value(&f.value));
+                            } else { sql.push_str(&format!("{} LIKE ?", field)); }
+                            params.push(json_to_paramvalue_value(&value));
+                        }
+                        "isnull" => { sql.push_str(&format!("{} IS NULL", field)); }
+                        "notnull" => { sql.push_str(&format!("{} IS NOT NULL", field)); }
+                        "between" => {
+                            if let serde_json::Value::Array(arr) = &f.value {
+                                if arr.len() >= 2 {
+                                    sql.push_str(&format!("{} BETWEEN ? AND ?", field));
+                                    params.push(json_to_paramvalue_value(&arr[0]));
+                                    params.push(json_to_paramvalue_value(&arr[1]));
+                                } else {
+                                    sql.push_str(&format!("{} = ?", field));
+                                    if let Some(v0) = arr.get(0) { params.push(json_to_paramvalue_value(v0)); } else { params.push(ParamValue::Null); }
+                                }
+                            } else { sql.push_str(&format!("{} = ?", field)); params.push(json_to_paramvalue_value(&f.value)); }
+                        }
+                        "not_in" | "nin" => {
+                            if let serde_json::Value::Array(arr) = &f.value {
+                                if arr.is_empty() { sql.push_str("1=1"); }
+                                else {
+                                    sql.push_str(&format!("{} NOT IN ({} )", field, {
+                                        let mut placeholders = String::new();
+                                        for (j, v) in arr.iter().enumerate() {
+                                            if j > 0 { placeholders.push_str(", "); }
+                                            placeholders.push('?');
+                                            params.push(json_to_paramvalue_value(v));
+                                        }
+                                        placeholders
+                                    }));
+                                }
+                            } else { sql.push_str(&format!("{} <> ?", field)); params.push(json_to_paramvalue_value(&f.value)); }
                         }
                         "ne" | "<>" => { sql.push_str(&format!("{} <> ?", field)); params.push(json_to_paramvalue_value(&f.value)); }
                         "lt" => { sql.push_str(&format!("{} < ?", field)); params.push(json_to_paramvalue_value(&f.value)); }
@@ -406,6 +525,10 @@ fn build_sql_json(py: Python, ir_json: String) -> PyResult<PyObject> {
             ParamValue::Date(d) => serde_json::Value::String(d.to_string()),
             ParamValue::Time(t) => serde_json::Value::String(t.to_string()),
             ParamValue::DateTime(dt) => serde_json::Value::String(dt.to_string()),
+            ParamValue::ArrayStr(v) => serde_json::Value::Array(v.iter().map(|s| serde_json::Value::String(s.clone())).collect()),
+            ParamValue::ArrayI64(v) => serde_json::Value::Array(v.iter().map(|x| serde_json::Value::Number((*x).into())).collect()),
+            ParamValue::ArrayF64(v) => serde_json::Value::Array(v.iter().filter_map(|x| serde_json::Number::from_f64(*x)).map(serde_json::Value::Number).collect()),
+            ParamValue::ArrayBool(v) => serde_json::Value::Array(v.iter().map(|b| serde_json::Value::Bool(*b)).collect()),
         };
         let obj = json_to_py_object(py, j)?;
         py_params.append(obj)?;
@@ -537,6 +660,47 @@ fn py_to_paramvalue(py: Python, obj: &PyAny) -> PyResult<ParamValue> {
     if obj.is_none() {
         return Ok(ParamValue::Null);
     }
+    // Arrays (lists) first to preserve array typing for Postgres
+    if let Ok(list) = obj.downcast::<PyList>() {
+        // Try to detect homogeneous types
+        if list.len() == 0 {
+            return Ok(ParamValue::Json(serde_json::Value::Array(vec![])));
+        }
+        let mut all_str = true;
+        let mut all_i64 = true;
+        let mut all_f64 = true;
+        let mut all_bool = true;
+        for v in list.iter() {
+            all_str &= v.downcast::<PyString>().is_ok();
+            all_i64 &= v.extract::<i64>().is_ok();
+            all_f64 &= v.extract::<f64>().is_ok();
+            all_bool &= v.extract::<bool>().is_ok();
+        }
+        if all_str {
+            let mut arr = Vec::with_capacity(list.len());
+            for v in list.iter() { arr.push(v.downcast::<PyString>()?.to_string_lossy().to_string()); }
+            return Ok(ParamValue::ArrayStr(arr));
+        }
+        if all_i64 {
+            let mut arr = Vec::with_capacity(list.len());
+            for v in list.iter() { arr.push(v.extract::<i64>()?); }
+            return Ok(ParamValue::ArrayI64(arr));
+        }
+        if all_f64 {
+            let mut arr = Vec::with_capacity(list.len());
+            for v in list.iter() { arr.push(v.extract::<f64>()?); }
+            return Ok(ParamValue::ArrayF64(arr));
+        }
+        if all_bool {
+            let mut arr = Vec::with_capacity(list.len());
+            for v in list.iter() { arr.push(v.extract::<bool>()?); }
+            return Ok(ParamValue::ArrayBool(arr));
+        }
+        // Fallback to JSON array
+        let mut arr = Vec::new();
+        for v in list.iter() { arr.push(py_any_to_json(py, v)?); }
+        return Ok(ParamValue::Json(serde_json::Value::Array(arr)));
+    }
     if let Ok(b) = obj.extract::<bool>() {
         return Ok(ParamValue::Bool(b));
     }
@@ -629,13 +793,6 @@ fn py_to_paramvalue(py: Python, obj: &PyAny) -> PyResult<ParamValue> {
         }
         return Ok(ParamValue::Json(serde_json::Value::Object(m)));
     }
-    if let Ok(list) = obj.downcast::<PyList>() {
-        let mut arr = Vec::new();
-        for v in list.iter() {
-            arr.push(py_any_to_json(py, v)?);
-        }
-        return Ok(ParamValue::Json(serde_json::Value::Array(arr)));
-    }
     // default: string repr
     Ok(ParamValue::Str(obj.str()?.to_string_lossy().to_string()))
 }
@@ -705,6 +862,10 @@ pub enum ParamValue {
     Date(NaiveDate),
     Time(NaiveTime),
     DateTime(NaiveDateTime),
+    ArrayStr(Vec<String>),
+    ArrayI64(Vec<i64>),
+    ArrayF64(Vec<f64>),
+    ArrayBool(Vec<bool>),
 }
 
 // ---- Placeholder normalization for Postgres ----
@@ -755,6 +916,10 @@ fn bind_postgres_param<'q>(mut query: Query<'q, Postgres, PgArguments>, param: &
         ParamValue::Date(d) => query.bind(*d),
         ParamValue::Time(t) => query.bind(*t),
         ParamValue::DateTime(dt) => query.bind(*dt),
+        ParamValue::ArrayStr(v) => query.bind(v),
+        ParamValue::ArrayI64(v) => query.bind(v),
+        ParamValue::ArrayF64(v) => query.bind(v),
+        ParamValue::ArrayBool(v) => query.bind(v),
     }
 }
 
@@ -772,6 +937,10 @@ fn bind_mysql_param<'q>(mut query: Query<'q, MySql, MySqlArguments>, param: &'q 
         ParamValue::Date(d) => query.bind(d.to_string()),
         ParamValue::Time(t) => query.bind(t.to_string()),
         ParamValue::DateTime(dt) => query.bind(dt.to_string()),
+        ParamValue::ArrayStr(v) => query.bind(serde_json::to_string(v).unwrap_or_default()),
+        ParamValue::ArrayI64(v) => query.bind(serde_json::to_string(v).unwrap_or_default()),
+        ParamValue::ArrayF64(v) => query.bind(serde_json::to_string(v).unwrap_or_default()),
+        ParamValue::ArrayBool(v) => query.bind(serde_json::to_string(v).unwrap_or_default()),
     }
 }
 
@@ -789,6 +958,10 @@ fn bind_sqlite_param<'q>(mut query: Query<'q, Sqlite, SqliteArguments<'q>>, para
         ParamValue::Date(d) => query.bind(d.to_string()),
         ParamValue::Time(t) => query.bind(t.to_string()),
         ParamValue::DateTime(dt) => query.bind(dt.to_string()),
+        ParamValue::ArrayStr(v) => query.bind(serde_json::to_string(v).unwrap_or_default()),
+        ParamValue::ArrayI64(v) => query.bind(serde_json::to_string(v).unwrap_or_default()),
+        ParamValue::ArrayF64(v) => query.bind(serde_json::to_string(v).unwrap_or_default()),
+        ParamValue::ArrayBool(v) => query.bind(serde_json::to_string(v).unwrap_or_default()),
     }
 }
 
