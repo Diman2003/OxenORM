@@ -968,13 +968,73 @@ class ExistsQuery(AwaitableQuery):
         return _self().__await__()
     
     async def _execute(self) -> bool:
-        """Execute the exists query and return True if any records exist."""
-        # Use count query with limit 1 for efficiency
-        count_query = CountQuery(self.model, self._db, self._q_objects)
-        count_query._limit = 1
-        
-        count = await count_query._execute()
-        return count > 0
+        """Execute the exists query using IR: SELECT 1 ... LIMIT 1."""
+        db = self._choose_db()
+        if not db:
+            raise OperationalError("No database connection available")
+
+        # Build conditions
+        conditions: dict[str, Any] = {}
+        for q_obj in self._q_objects:
+            if hasattr(q_obj, 'filters'):
+                conditions.update(q_obj.filters)
+            elif hasattr(q_obj, 'children'):
+                for child in q_obj.children:
+                    if hasattr(child, 'filters'):
+                        conditions.update(child.filters)
+                    elif isinstance(child, dict):
+                        conditions.update(child)
+            elif isinstance(q_obj, dict):
+                conditions.update(q_obj)
+            else:
+                try:
+                    conditions.update(dict(q_obj))
+                except:
+                    pass
+
+        dialect = 'postgres' if 'postgresql' in getattr(db, 'connection_string', '').lower() else (
+            'mysql' if 'mysql' in getattr(db, 'connection_string', '').lower() else 'sqlite'
+        )
+        filters: list[dict[str, Any]] = []
+        for key, value in conditions.items():
+            if '__' in key:
+                field_name, lookup = key.split('__', 1)
+                if lookup == 'startswith':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"{value}%"})
+                elif lookup == 'endswith':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"%{value}"})
+                elif lookup == 'contains':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"%{value}%"})
+                elif lookup in ('lt','lte','gt','gte','in','ne'):
+                    filters.append({'field': field_name, 'op': lookup, 'value': value})
+                else:
+                    filters.append({'field': field_name, 'op': 'eq', 'value': value})
+            else:
+                filters.append({'field': key, 'op': 'eq', 'value': value})
+
+        ir = {
+            'dialect': dialect,
+            'table': self.model._meta.table_name,
+            'select': ['1'],
+            'filters': filters,
+            'limit': 1,
+        }
+        try:
+            from oxen_engine import build_sql_json
+            import json as _json
+            built = build_sql_json(_json.dumps(ir))
+            query = built.get('sql')
+            params = built.get('params')
+        except Exception:
+            query = f"SELECT 1 FROM {self.model._meta.table_name} LIMIT 1"
+            params = []
+
+        result = await db.execute_query(query, params if params else None)
+        if result.get('error') is None:
+            data = result.get('data', [])
+            return bool(data)
+        else:
+            raise OperationalError(f"Failed to execute exists query: {result.get('error', 'Unknown error')}")
 
 class CountQuery(AwaitableQuery):
     """Query for counting records."""
