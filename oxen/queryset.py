@@ -29,6 +29,7 @@ from oxen.query_utils import (
 
 if TYPE_CHECKING:  # pragma: nocoverage
     from oxen.models import Model
+    from oxen.expressions import WindowFunction
 
 MODEL = TypeVar("MODEL", bound="Model")
 T_co = TypeVar("T_co", covariant=True)
@@ -65,33 +66,39 @@ class QuerySetSingle(Generic[T_co]):
         self, *args: str | Prefetch
     ) -> 'QuerySetSingle[T_co]':
         """Prefetch related objects."""
-        raise NotImplementedError()
+        # Delegate to underlying queryset and preserve single semantics
+        return QuerySetSingle(self.queryset.prefetch_related(*args))
 
     def select_related(self, *args: str) -> 'QuerySetSingle[T_co]':
         """Select related objects."""
-        raise NotImplementedError()
+        return QuerySetSingle(self.queryset.select_related(*args))
 
     def annotate(
         self, **kwargs: Expression
     ) -> 'QuerySetSingle[T_co]':
         """Add annotations to the query."""
-        raise NotImplementedError()
+        return QuerySetSingle(self.queryset.annotate(**kwargs))
 
     def only(self, *fields_for_select: str) -> 'QuerySetSingle[T_co]':
         """Select only specific fields."""
-        raise NotImplementedError()
+        return QuerySetSingle(self.queryset.only(*fields_for_select))
 
     def values_list(
         self, *fields_: str, flat: bool = False
     ) -> 'ValuesListQuery[Literal[True]]':
         """Return values as a list."""
-        raise NotImplementedError()
+        # Return a single-row values list query
+        q = self.queryset.values_list(*fields_, flat=flat)
+        q._single = True  # type: ignore[attr-defined]
+        return q  # type: ignore[return-value]
 
     def values(
         self, *args: str, **kwargs: str
     ) -> 'ValuesQuery[Literal[True]]':
         """Return values as dictionaries."""
-        raise NotImplementedError()
+        q = self.queryset.values(*args, **kwargs)
+        q._single = True  # type: ignore[attr-defined]
+        return q  # type: ignore[return-value]
 
 
 class AwaitableQuery(Generic[MODEL]):
@@ -209,6 +216,8 @@ class QuerySet(AwaitableQuery[MODEL]):
         "_having",
         "_single",
         "_raise_does_not_exist",
+        "_return_tuples",
+        "_return_flat",
     )
 
     def __init__(self, model: type[MODEL], db: Any = None) -> None:
@@ -228,6 +237,8 @@ class QuerySet(AwaitableQuery[MODEL]):
         self._having: Optional[Q] = None
         self._single: bool = False
         self._raise_does_not_exist: bool = True
+        self._return_tuples: bool = False
+        self._return_flat: bool = False
 
     def _clone(self) -> 'QuerySet[MODEL]':
         """Clone the queryset."""
@@ -578,6 +589,210 @@ class QuerySet(AwaitableQuery[MODEL]):
         clone._only_fields = fields_for_select
         return clone
 
+    def as_tuples(self, flat: bool = False) -> 'QuerySet[MODEL]':
+        """Return rows as tuples (no hydration). If flat=True, return first column only.
+
+        Note: Best for simple selects without joins/annotations.
+        """
+        clone = self._clone()
+        setattr(clone, '_return_tuples', True)
+        setattr(clone, '_return_flat', bool(flat))
+        return clone
+
+    async def as_columns(self) -> dict[str, list[Any]]:
+        """Execute and return columnar data as dict[column] -> list of values.
+
+        Uses Rust engine execute_query_columns for fast dict-of-arrays.
+        """
+        db = self._choose_db()
+        if not db:
+            raise OperationalError("No database connection available")
+
+        # Build SQL via IR
+        base_table = self.model._meta.table_name
+        if getattr(self, '_only_fields', None):
+            select_fields = [f"{base_table}.{f}" for f in self._only_fields]
+        else:
+            select_fields = [f"{base_table}.{self.model._meta.fields_db_projection.get(fname, fname)}" for fname in self.model._meta.db_fields]
+
+        # Minimal filters/ordering as in _execute
+        and_conditions: dict[str, Any] = {}
+        for q_obj in self._q_objects:
+            if hasattr(q_obj, 'filters'):
+                and_conditions.update(q_obj.filters)
+            elif hasattr(q_obj, 'children'):
+                for child in q_obj.children:
+                    if hasattr(child, 'filters'):
+                        and_conditions.update(child.filters)
+                    elif isinstance(child, dict):
+                        and_conditions.update(child)
+            elif isinstance(q_obj, dict):
+                and_conditions.update(q_obj)
+        def _convert(cond: dict[str, Any]) -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
+            for key, value in cond.items():
+                if '__' in key:
+                    field_name, lookup = key.split('__', 1)
+                    if lookup == 'startswith':
+                        out.append({'field': field_name, 'op': 'like', 'value': f"{value}%"})
+                    elif lookup == 'endswith':
+                        out.append({'field': field_name, 'op': 'like', 'value': f"%{value}"})
+                    elif lookup == 'contains':
+                        out.append({'field': field_name, 'op': 'like', 'value': f"%{value}%"})
+                    elif lookup in ('lt','lte','gt','gte','in','ne','not_in','nin','isnull','notnull'):
+                        out.append({'field': field_name, 'op': lookup, 'value': value})
+                    else:
+                        out.append({'field': field_name, 'op': 'eq', 'value': value})
+                else:
+                    out.append({'field': key, 'op': 'eq', 'value': value})
+            return out
+        order_by = [ {'field': f, 'direction': d.value} for f, d in self._orderings ]
+        conn_str = (getattr(db, 'connection_string', '') or getattr(db, '_connection_string', '')).lower()
+        dialect = 'postgres' if 'postgresql' in conn_str else ('mysql' if 'mysql' in conn_str else 'sqlite')
+        ir = {
+            'dialect': dialect,
+            'table': self.model._meta.table_name,
+            'select': select_fields,
+            'filters': _convert(and_conditions),
+            'order_by': order_by,
+            'limit': self._limit,
+            'offset': self._offset,
+        }
+        if hasattr(db, '_rust_engine'):
+            try:
+                # Prefer compiled columns factory
+                if hasattr(db._rust_engine, 'execute_compiled_ir_columns'):
+                    data = await db._rust_engine.execute_ir_compiled_columns(ir)  # type: ignore[attr-defined]
+                else:
+                    data = await db._rust_engine.execute_ir_columns(ir)  # type: ignore[attr-defined]
+                if isinstance(data, dict) and data:
+                    return data
+            except Exception:
+                pass
+
+        # Fallback: execute and pivot in Python
+        try:
+            from oxen_engine import build_sql_json
+            import json as _json
+            built = build_sql_json(_json.dumps(ir))
+            query = built.get('sql')
+            params = built.get('params')
+        except Exception:
+            query = f"SELECT {', '.join(select_fields)} FROM {self.model._meta.table_name}"
+            params = []
+        result = await db.execute_query(query, params if params else None)
+        if result.get('error') is not None:
+            raise OperationalError(f"Failed to execute columnar query: {result.get('error', 'Unknown error')}")
+        rows = result.get('data', []) or []
+        cols: dict[str, list[Any]] = {}
+        for r in rows:
+            if isinstance(r, dict):
+                for k, v in r.items():
+                    cols.setdefault(k, []).append(v)
+        return cols
+
+    async def as_arrow(self) -> Any:
+        """Return results as a pyarrow.Table via Rust-backed column fetch.
+
+        Requires env OXEN_ARROW=1 and `pyarrow` installed.
+        """
+        db = self._choose_db()
+        if not db:
+            raise OperationalError("No database connection available")
+        # Build IR same as as_columns
+        base_table = self.model._meta.table_name
+        if getattr(self, '_only_fields', None):
+            select_fields = [f"{base_table}.{f}" for f in self._only_fields]
+        else:
+            select_fields = [f"{base_table}.{self.model._meta.fields_db_projection.get(fname, fname)}" for fname in self.model._meta.db_fields]
+        and_conditions: dict[str, Any] = {}
+        for q_obj in self._q_objects:
+            if hasattr(q_obj, 'filters'):
+                and_conditions.update(q_obj.filters)
+            elif hasattr(q_obj, 'children'):
+                for child in q_obj.children:
+                    if hasattr(child, 'filters'):
+                        and_conditions.update(child.filters)
+                    elif isinstance(child, dict):
+                        and_conditions.update(child)
+            elif isinstance(q_obj, dict):
+                and_conditions.update(q_obj)
+        def _convert(cond: dict[str, Any]) -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
+            for key, value in cond.items():
+                if '__' in key:
+                    field_name, lookup = key.split('__', 1)
+                    if lookup == 'startswith':
+                        out.append({'field': field_name, 'op': 'like', 'value': f"{value}%"})
+                    elif lookup == 'endswith':
+                        out.append({'field': field_name, 'op': 'like', 'value': f"%{value}"})
+                    elif lookup == 'contains':
+                        out.append({'field': field_name, 'op': 'like', 'value': f"%{value}%"})
+                    elif lookup in ('lt','lte','gt','gte','in','ne','not_in','nin','isnull','notnull'):
+                        out.append({'field': field_name, 'op': lookup, 'value': value})
+                    else:
+                        out.append({'field': field_name, 'op': 'eq', 'value': value})
+                else:
+                    out.append({'field': key, 'op': 'eq', 'value': value})
+            return out
+        order_by = [ {'field': f, 'direction': d.value} for f, d in self._orderings ]
+        conn_str = (getattr(db, 'connection_string', '') or getattr(db, '_connection_string', '')).lower()
+        dialect = 'postgres' if 'postgresql' in conn_str else ('mysql' if 'mysql' in conn_str else 'sqlite')
+        ir = {
+            'dialect': dialect,
+            'table': self.model._meta.table_name,
+            'select': select_fields,
+            'filters': _convert(and_conditions),
+            'order_by': order_by,
+            'limit': self._limit,
+            'offset': self._offset,
+        }
+        if hasattr(db, '_rust_engine'):
+            try:
+                # Use compiled columns and build arrow when native Arrow is unavailable
+                try:
+                    cols = await db._rust_engine.execute_ir_compiled_columns(ir)  # type: ignore[attr-defined]
+                    import importlib, os as _os
+                    _os.environ.setdefault('OXEN_ARROW', '1')
+                    pa = importlib.import_module('pyarrow')
+                    return pa.table(cols)
+                except Exception:
+                    return await db._rust_engine.execute_ir_arrow(ir)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        # Fallback to Python arrow build
+        try:
+            import importlib, os as _os
+            _os.environ.setdefault('OXEN_ARROW', '1')
+            pa = importlib.import_module('pyarrow')
+        except Exception:
+            raise OperationalError("pyarrow is not installed. Install with: pip install pyarrow")
+        columns = await self.as_columns()
+        return pa.table(columns)
+
+    async def as_numpy(self) -> Any:
+        """Return results as dict[str, numpy.ndarray] using as_columns()."""
+        try:
+            import importlib
+            np = importlib.import_module('numpy')
+        except Exception:
+            raise OperationalError("numpy is not installed. Install with: pip install numpy")
+        cols = await self.as_columns()
+        return {k: np.array(v) for k, v in cols.items()}
+
+    async def iter(self, chunk_size: int = 1000) -> AsyncIterator[list[MODEL]]:
+        """Async generator yielding results in chunks using paging (LIMIT/OFFSET)."""
+        offset = 0
+        while True:
+            page = self._clone()
+            page._limit = chunk_size
+            page._offset = offset
+            rows = await page
+            if not rows:
+                break
+            yield rows
+            offset += len(rows)
+
     def select_related(self, *fields: str) -> 'QuerySet[MODEL]':
         """Select related objects."""
         clone = self._clone()
@@ -671,30 +886,52 @@ class QuerySet(AwaitableQuery[MODEL]):
         if not db:
             raise OperationalError("No database connection available")
         
-        # Build conditions from filters
-        conditions = {}
+        # Build conditions from filters and collect OR groups
+        and_conditions: dict[str, Any] = {}
+        or_groups_source: list[list[dict[str, Any]]] = []
         for q_obj in self._q_objects:
-            # Handle Q objects properly
-            if hasattr(q_obj, 'filters'):
-                conditions.update(q_obj.filters)
-            elif hasattr(q_obj, 'children'):
-                for child in q_obj.children:
-                    if hasattr(child, 'filters'):
-                        conditions.update(child.filters)
-                    elif isinstance(child, dict):
-                        conditions.update(child)
-            elif isinstance(q_obj, dict):
-                conditions.update(q_obj)
+            try:
+                join_type = getattr(q_obj, 'join_type', 'AND')
+            except Exception:
+                join_type = 'AND'
+            if join_type == 'OR' and (hasattr(q_obj, 'filters') or hasattr(q_obj, 'children')):
+                group_filters: list[dict[str, Any]] = []
+                if hasattr(q_obj, 'filters') and q_obj.filters:
+                    group_filters.append(q_obj.filters)
+                if hasattr(q_obj, 'children') and q_obj.children:
+                    for child in q_obj.children:
+                        if hasattr(child, 'filters') and child.filters:
+                            group_filters.append(child.filters)
+                        elif isinstance(child, dict) and child:
+                            group_filters.append(child)
+                if group_filters:
+                    or_groups_source.append(group_filters)
             else:
-                # Try to convert to dict
-                try:
-                    conditions.update(dict(q_obj))
-                except:
-                    # Skip if can't convert
-                    pass
+                # Default AND accumulation
+                if hasattr(q_obj, 'filters'):
+                    and_conditions.update(q_obj.filters)
+                elif hasattr(q_obj, 'children'):
+                    for child in q_obj.children:
+                        if hasattr(child, 'filters'):
+                            and_conditions.update(child.filters)
+                        elif isinstance(child, dict):
+                            and_conditions.update(child)
+                elif isinstance(q_obj, dict):
+                    and_conditions.update(q_obj)
+                else:
+                    try:
+                        and_conditions.update(dict(q_obj))
+                    except Exception:
+                        pass
         
         # Build the query
-        select_fields = ["*"]
+        # Default projection: only base table columns when not otherwise specified
+        base_table = self.model._meta.table_name
+        if getattr(self, '_only_fields', None):
+            select_fields = [f"{base_table}.{f}" for f in self._only_fields]
+        else:
+            # project base table explicit columns instead of '*'
+            select_fields = [f"{base_table}.{self.model._meta.fields_db_projection.get(fname, fname)}" for fname in self.model._meta.db_fields]
         
         # Add window functions to select fields
         if hasattr(self, '_window_functions') and self._window_functions:
@@ -725,30 +962,86 @@ class QuerySet(AwaitableQuery[MODEL]):
                 cte_clauses.append(f"{recursive_keyword}{cte_name} AS ({cte_sql})")
             with_sql = ", ".join(cte_clauses)
         
+        # Build joins for select_related (inner joins) and project only joined PKs by default
+        joins: list[dict[str, Any]] = []
+        joined_projection: list[str] = []
+        if self._select_related:
+            try:
+                for lookup in self._select_related:
+                    current_model = self.model
+                    current_table = self.model._meta.table_name
+                    parts = lookup.split("__") if isinstance(lookup, str) else [str(lookup)]
+                    for part in parts:
+                        field_obj = current_model._meta.fields_map.get(part)
+                        if field_obj is None:
+                            break
+                        # Expect relational fields
+                        if not hasattr(field_obj, 'is_relational') or not field_obj.is_relational:
+                            break
+                        related_model = field_obj._get_related_model() if hasattr(field_obj, '_get_related_model') else None
+                        if not related_model:
+                            break
+                        related_table = related_model._meta.table_name
+                        left_col = f"{current_table}.{part}"
+                        right_col = f"{related_table}.{related_model._meta.pk_attr}"
+                        joins.append({
+                            'join_type': 'inner',
+                            'table': related_table,
+                            'on': {
+                                'left': left_col,
+                                'op': '=',
+                                'right': right_col,
+                            }
+                        })
+                        # Project only the related PK by default to keep rows slim
+                        joined_projection.append(f"{related_table}.{related_model._meta.pk_attr}")
+                        current_model = related_model
+                        current_table = related_table
+            except Exception:
+                # Best-effort: ignore join build errors
+                joins = []
+                joined_projection = []
+
         # Build IR for Rust builder
-        dialect = 'postgres' if 'postgresql' in getattr(db, 'connection_string', '').lower() else (
-            'mysql' if 'mysql' in getattr(db, 'connection_string', '').lower() else 'sqlite'
-        )
+        conn_str = (getattr(db, 'connection_string', '') or getattr(db, '_connection_string', '')).lower()
+        dialect = 'postgres' if 'postgresql' in conn_str else ('mysql' if 'mysql' in conn_str else 'sqlite')
         order_by = [
             {'field': field, 'direction': direction.value}
             for field, direction in self._orderings
         ]
-        filters = []
-        for key, value in conditions.items():
-            if '__' in key:
-                field_name, lookup = key.split('__', 1)
-                if lookup == 'startswith':
-                    filters.append({'field': field_name, 'op': 'like', 'value': f"{value}%"})
-                elif lookup == 'endswith':
-                    filters.append({'field': field_name, 'op': 'like', 'value': f"%{value}"})
-                elif lookup == 'contains':
-                    filters.append({'field': field_name, 'op': 'like', 'value': f"%{value}%"})
-                elif lookup in ('lt','lte','gt','gte','in','ne'):
-                    filters.append({'field': field_name, 'op': lookup, 'value': value})
+        def _convert_condition_map(cond_map: dict[str, Any]) -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
+            for key, value in cond_map.items():
+                if '__' in key:
+                    field_name, lookup = key.split('__', 1)
+                    if lookup == 'startswith':
+                        out.append({'field': field_name, 'op': 'like', 'value': f"{value}%"})
+                    elif lookup == 'istartswith':
+                        out.append({'field': field_name, 'op': 'ilike', 'value': f"{value}%"})
+                    elif lookup == 'endswith':
+                        out.append({'field': field_name, 'op': 'like', 'value': f"%{value}"})
+                    elif lookup == 'iendswith':
+                        out.append({'field': field_name, 'op': 'ilike', 'value': f"%{value}"})
+                    elif lookup == 'contains':
+                        out.append({'field': field_name, 'op': 'like', 'value': f"%{value}%"})
+                    elif lookup == 'icontains':
+                        out.append({'field': field_name, 'op': 'ilike', 'value': f"%{value}%"})
+                    elif lookup in ('lt','lte','gt','gte','in','ne','not_in','nin','isnull','notnull'):
+                        out.append({'field': field_name, 'op': lookup, 'value': value})
+                    else:
+                        out.append({'field': field_name, 'op': 'eq', 'value': value})
                 else:
-                    filters.append({'field': field_name, 'op': 'eq', 'value': value})
-            else:
-                filters.append({'field': key, 'op': 'eq', 'value': value})
+                    out.append({'field': key, 'op': 'eq', 'value': value})
+            return out
+
+        filters = _convert_condition_map(and_conditions)
+        groups: list[dict[str, Any]] = []
+        for group in or_groups_source:
+            group_filters: list[dict[str, Any]] = []
+            for filt_map in group:
+                group_filters.extend(_convert_condition_map(filt_map))
+            if group_filters:
+                groups.append({'kind': 'or', 'filters': group_filters})
 
         ir = {
             'dialect': dialect,
@@ -762,8 +1055,108 @@ class QuerySet(AwaitableQuery[MODEL]):
         }
         if with_sql:
             ir['with_sql'] = with_sql
+        if joins:
+            ir['joins'] = joins
+        if groups:
+            ir['groups'] = groups
+        if joined_projection:
+            # Extend select list with joined PKs (or later extended columns)
+            ir['select'] = select_fields + joined_projection
 
-        # Use Rust builder
+        # Execute via UnifiedEngine using single-hop Rust paths where possible
+        # Fast path: if no joins/annotations/group-bys/window, request tuple rows, then hydrate
+        use_tuple_mode = False
+        try:
+            no_joins = not joins
+            no_annotations = not self._annotations
+            no_group_bys = not self._group_bys
+            no_windows = not getattr(self, '_window_functions', {})
+            # If projection is simple base-table fields (either only() or default base projection)
+            simple_projection = no_joins and no_annotations and no_group_bys and no_windows
+            if simple_projection:
+                use_tuple_mode = True
+        except Exception:
+            use_tuple_mode = False
+
+        if use_tuple_mode and hasattr(db, '_rust_engine'):
+            try:
+                # Prefer IR-tuple execution to avoid double-compilation
+                tuple_rows = await db._rust_engine.execute_ir_tuples(ir)  # type: ignore[attr-defined]
+                # Map select columns back to model field names
+                select_cols = ir.get('select') or []
+                # Reverse projection map: db_column -> model_field
+                rev_proj = {v: k for k, v in self.model._meta.fields_db_projection.items()}
+                col_names: list[str] = []
+                for c in select_cols:
+                    # c may be "table.col" or an expression like "... AS alias"; handle basic table.col
+                    name = c.split('.')[-1].strip().split(' AS ')[0].strip('"')
+                    model_field = rev_proj.get(name, name)
+                    if model_field in self.model._meta.fields_map:
+                        col_names.append(model_field)
+                if not col_names:
+                    col_names = list(self.model._meta.db_fields)
+                instances: list[MODEL] = []
+                for r in tuple_rows:
+                    data = {col_names[i]: r[i] for i in range(min(len(col_names), len(r)))}
+                    instance = self.model._init_from_db(**data)
+                    instance._meta.db = db
+                    instances.append(instance)
+                return instances
+            except Exception:
+                pass
+
+        # Global tuple-return opt-in for plain reads (skip hydration)
+        if getattr(self, '_return_tuples', False) and not joins and hasattr(db, '_rust_engine'):
+            try:
+                tuple_rows = await db._rust_engine.execute_query_tuples(query, params if params else None)  # type: ignore[attr-defined]
+                if getattr(self, '_return_flat', False):
+                    return [r[0] if r else None for r in tuple_rows]
+                return [tuple(r) for r in tuple_rows]
+            except Exception:
+                pass
+
+        # Prefer zero-copy-ish dict rows from Rust when available (single IR hop)
+        if hasattr(db, '_rust_engine'):
+            try:
+                # Prefer Rust-side model hydration when projection maps cleanly
+                select_cols = ir.get('select') or []
+                rev_proj = {v: k for k, v in self.model._meta.fields_db_projection.items()}
+                indices: list[int] = []
+                names: list[str] = []
+                for idx, c in enumerate(select_cols):
+                    name = c.split('.')[-1].strip().split(' AS ')[0].strip('"')
+                    model_field = rev_proj.get(name, name)
+                    if model_field in self.model._meta.fields_map:
+                        indices.append(idx)
+                        names.append(model_field)
+                if indices and names and len(indices) == len(select_cols):
+                    return await db._rust_engine.execute_ir_models(ir, self.model, getattr(db, '_rust_engine', db), indices, names)  # type: ignore[attr-defined]
+
+                # Fallback: Let Rust build SQL and return dict rows
+                res = await db._rust_engine.execute_ir(ir)  # type: ignore[attr-defined]
+                rows = res.get('data', []) if isinstance(res, dict) else []
+                instances: list[MODEL] = []
+                if rows and joins:
+                    seen: dict[Any, Any] = {}
+                    pk_attr = self.model._meta.pk_attr
+                    for record in rows:
+                        pk_val = record.get(pk_attr)
+                        if pk_val in seen:
+                            continue
+                        instance = self.model._init_from_db(**record)
+                        instance._meta.db = db
+                        instances.append(instance)
+                        seen[pk_val] = instance
+                else:
+                    for record in rows:
+                        instance = self.model._init_from_db(**record)
+                        instance._meta.db = db
+                        instances.append(instance)
+                return instances
+            except Exception:
+                pass
+
+        # Fallback: build SQL and execute via engine
         try:
             from oxen_engine import build_sql_json
             import json as _json
@@ -771,23 +1164,18 @@ class QuerySet(AwaitableQuery[MODEL]):
             query = built.get('sql')
             params = built.get('params')
         except Exception:
-            # Fallback: naive select all
             query = f"SELECT * FROM {self.model._meta.table_name}"
             params = []
-
-        # Execute via UnifiedEngine
         result = await db.execute_query(query, params if params else None)
-        
-        if result.get('error') is None:
-            records = result.get('data', [])
-            instances = []
-            for record in records:
-                instance = self.model._init_from_db(**record)
-                instance._meta.db = db
-                instances.append(instance)
-            return instances
-        else:
+        if result.get('error') is not None:
             raise OperationalError(f"Failed to execute query: {result.get('error', 'Unknown error')}")
+        records = result.get('data', [])
+        instances = []
+        for record in records:
+            instance = self.model._init_from_db(**record)
+            instance._meta.db = db
+            instances.append(instance)
+        return instances
 
 
 # Placeholder classes for other query types
@@ -807,7 +1195,12 @@ class UpdateQuery(AwaitableQuery):
         return _self().__await__()
     
     async def _execute(self) -> int:
-        """Execute the update query and return number of rows affected."""
+        """Execute the update query and return number of rows affected.
+
+        Optimizations:
+        - If updating a single field across multiple ids, generate one UPDATE ... WHERE id IN (...)
+        - If updating multiple fields with per-id values, use CASE ... WHEN id THEN value END
+        """
         db = self._choose_db()
         if not db:
             raise OperationalError("No database connection available")
@@ -831,9 +1224,8 @@ class UpdateQuery(AwaitableQuery):
                 except:
                     pass
 
-        dialect = 'postgres' if 'postgresql' in getattr(db, 'connection_string', '').lower() else (
-            'mysql' if 'mysql' in getattr(db, 'connection_string', '').lower() else 'sqlite'
-        )
+        conn_str = (getattr(db, 'connection_string', '') or getattr(db, '_connection_string', '')).lower()
+        dialect = 'postgres' if 'postgresql' in conn_str else ('mysql' if 'mysql' in conn_str else 'sqlite')
         # Convert filters
         filters = []
         for key, value in conditions.items():
@@ -852,21 +1244,44 @@ class UpdateQuery(AwaitableQuery):
             else:
                 filters.append({'field': key, 'op': 'eq', 'value': value})
         # Build IR
-        ir = {
-            'dialect': dialect,
-            'table': self.model._meta.table_name,
-            'action': 'update',
-            'set': self._update_data,
-            'filters': filters,
-        }
-        try:
-            from oxen_engine import build_sql_json
-            import json as _json
-            built = build_sql_json(_json.dumps(ir))
-            query = built.get('sql')
-            params = built.get('params')
-        except Exception:
-            raise OperationalError("Rust IR builder unavailable for update")
+        # Attempt optimized SQL generation for common patterns
+        id_list = None
+        if any(f.get('field') == 'id' and f.get('op') in ('in', 'eq') for f in filters):
+            # Extract id list for IN filter
+            for f in filters:
+                if f.get('field') == 'id' and f.get('op') == 'in':
+                    id_list = f.get('value', [])
+                if f.get('field') == 'id' and f.get('op') == 'eq':
+                    id_list = [f.get('value')]
+
+        query = None
+        params = None
+        if id_list and isinstance(id_list, list) and self._update_data:
+            # Single-field same value across ids
+            if len(self._update_data) == 1:
+                field, value = next(iter(self._update_data.items()))
+                placeholders = ', '.join(['?' for _ in id_list])
+                query = f'UPDATE "{self.model._meta.table_name}" SET "{field}" = ? WHERE "id" IN ({placeholders})'
+                params = [value] + id_list
+            else:
+                # CASE-based update is complex; fallback to IR builder
+                query = None
+        if query is None:
+            ir = {
+                'dialect': dialect,
+                'table': self.model._meta.table_name,
+                'action': 'update',
+                'set': self._update_data,
+                'filters': filters,
+            }
+            try:
+                from oxen_engine import build_sql_json
+                import json as _json
+                built = build_sql_json(_json.dumps(ir))
+                query = built.get('sql')
+                params = built.get('params')
+            except Exception:
+                raise OperationalError("Rust IR builder unavailable for update")
 
         result = await db.execute_query(query, params if params else None)
         if result.get('error') is None:
@@ -913,9 +1328,8 @@ class DeleteQuery(AwaitableQuery):
                 except:
                     pass
 
-        dialect = 'postgres' if 'postgresql' in getattr(db, 'connection_string', '').lower() else (
-            'mysql' if 'mysql' in getattr(db, 'connection_string', '').lower() else 'sqlite'
-        )
+        conn_str = (getattr(db, 'connection_string', '') or getattr(db, '_connection_string', '')).lower()
+        dialect = 'postgres' if 'postgresql' in conn_str else ('mysql' if 'mysql' in conn_str else 'sqlite')
         filters = []
         for key, value in conditions.items():
             if '__' in key:
@@ -993,9 +1407,8 @@ class ExistsQuery(AwaitableQuery):
                 except:
                     pass
 
-        dialect = 'postgres' if 'postgresql' in getattr(db, 'connection_string', '').lower() else (
-            'mysql' if 'mysql' in getattr(db, 'connection_string', '').lower() else 'sqlite'
-        )
+        conn_str = (getattr(db, 'connection_string', '') or getattr(db, '_connection_string', '')).lower()
+        dialect = 'postgres' if 'postgresql' in conn_str else ('mysql' if 'mysql' in conn_str else 'sqlite')
         filters: list[dict[str, Any]] = []
         for key, value in conditions.items():
             if '__' in key:
@@ -1090,9 +1503,8 @@ class CountQuery(AwaitableQuery):
                     pass
         
         # Build IR for COUNT(*) with filters
-        dialect = 'postgres' if 'postgresql' in getattr(db, 'connection_string', '').lower() else (
-            'mysql' if 'mysql' in getattr(db, 'connection_string', '').lower() else 'sqlite'
-        )
+        conn_str = (getattr(db, 'connection_string', '') or getattr(db, '_connection_string', '')).lower()
+        dialect = 'postgres' if 'postgresql' in conn_str else ('mysql' if 'mysql' in conn_str else 'sqlite')
         filters = []
         for key, value in conditions.items():
             if '__' in key:
@@ -1138,15 +1550,397 @@ class CountQuery(AwaitableQuery):
 
 class ValuesListQuery(AwaitableQuery, Generic[SINGLE]):
     """Query for returning values as lists."""
-    pass
+    def __init__(
+        self,
+        model: type[MODEL],
+        db: Any = None,
+        q_objects: list[Q] | None = None,
+        single: bool = False,
+        raise_does_not_exist: bool = False,
+        fields_for_select_list: tuple[str, ...] = (),
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        distinct: bool = False,
+        orderings: list[tuple[str, Order]] | None = None,
+        flat: bool = False,
+        annotations: dict[str, Any] | None = None,
+        custom_filters: dict[str, Any] | None = None,
+        group_bys: tuple[str, ...] | None = None,
+        force_indexes: set[str] | None = None,
+        use_indexes: set[str] | None = None,
+    ) -> None:
+        super().__init__(model)
+        self._db = db
+        self._q_objects = q_objects or []
+        self._single = single
+        self._raise_does_not_exist = raise_does_not_exist
+        self._fields = fields_for_select_list
+        self._limit = limit
+        self._offset = offset
+        self._distinct = distinct
+        self._orderings = orderings or []
+        self._flat = flat
+        self._annotations = annotations or {}
+        self._custom_filters = custom_filters or {}
+        self._group_bys = group_bys or ()
+        self._force_indexes = force_indexes or set()
+        self._use_indexes = use_indexes or set()
+
+    def __await__(self) -> Generator[Any, None, Any]:
+        async def _self() -> Any:
+            return await self._execute()
+        return _self().__await__()
+
+    async def _execute(self) -> Any:
+        db = self._choose_db()
+        if not db:
+            raise OperationalError("No database connection available")
+
+        # Build conditions
+        conditions: dict[str, Any] = {}
+        for q_obj in self._q_objects:
+            if hasattr(q_obj, 'filters'):
+                conditions.update(q_obj.filters)
+            elif hasattr(q_obj, 'children'):
+                for child in q_obj.children:
+                    if hasattr(child, 'filters'):
+                        conditions.update(child.filters)
+                    elif isinstance(child, dict):
+                        conditions.update(child)
+            elif isinstance(q_obj, dict):
+                conditions.update(q_obj)
+            else:
+                try:
+                    conditions.update(dict(q_obj))
+                except Exception:
+                    pass
+
+        # Select fields
+        fields = list(self._fields) if self._fields else [self.model._meta.pk_attr]
+        # When flat=True, expect exactly one field
+        if self._flat and len(fields) != 1:
+            raise ValueError("flat=True requires exactly one selected field")
+
+        # Determine dialect
+        conn_str = (getattr(db, 'connection_string', '') or getattr(db, '_connection_string', '')).lower()
+        dialect = 'postgres' if 'postgresql' in conn_str else ('mysql' if 'mysql' in conn_str else 'sqlite')
+
+        # Build filters IR
+        filters: list[dict[str, Any]] = []
+        for key, value in conditions.items():
+            if '__' in key:
+                field_name, lookup = key.split('__', 1)
+                if lookup == 'startswith':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"{value}%"})
+                elif lookup == 'istartswith':
+                    filters.append({'field': field_name, 'op': 'ilike', 'value': f"{value}%"})
+                elif lookup == 'endswith':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"%{value}"})
+                elif lookup == 'iendswith':
+                    filters.append({'field': field_name, 'op': 'ilike', 'value': f"%{value}"})
+                elif lookup == 'contains':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"%{value}%"})
+                elif lookup == 'icontains':
+                    filters.append({'field': field_name, 'op': 'ilike', 'value': f"%{value}%"})
+                elif lookup in ('lt','lte','gt','gte','in','ne','not_in','nin','isnull','notnull'):
+                    filters.append({'field': field_name, 'op': lookup, 'value': value})
+                else:
+                    filters.append({'field': field_name, 'op': 'eq', 'value': value})
+            else:
+                filters.append({'field': key, 'op': 'eq', 'value': value})
+
+        order_by = [
+            {'field': field, 'direction': direction.value}
+            for field, direction in self._orderings
+        ]
+
+        ir = {
+            'dialect': dialect,
+            'table': self.model._meta.table_name,
+            'select': fields,
+            'distinct': bool(self._distinct),
+            'filters': filters,
+            'order_by': order_by,
+            'limit': self._limit or (1 if self._single else None),
+            'offset': self._offset,
+        }
+
+        # Single-hop IR tuple path when available
+        if hasattr(db, '_rust_engine'):
+            try:
+                tuple_rows = await db._rust_engine.execute_ir_tuples(ir)  # type: ignore[attr-defined]
+                values = [list(r) for r in tuple_rows]
+                if self._flat:
+                    values = [v[0] if v else None for v in values]
+                if self._single:
+                    if not values:
+                        if getattr(self, '_raise_does_not_exist', False):
+                            raise DoesNotExist(f"No {self.model.__name__} matches the given query.")
+                        return None if self._flat else []
+                    return values[0]
+                return values
+            except Exception:
+                pass
+
+        # Prefer zero-copy-ish dict rows (though values_list expects tuples, we pivot if dicts)
+        rows = None
+        if hasattr(db, '_rust_engine'):
+            try:
+                res = await db._rust_engine.execute_ir(ir)  # type: ignore[attr-defined]
+                rows = res.get('data', []) if isinstance(res, dict) else None
+            except Exception:
+                rows = None
+        if rows is None:
+            try:
+                from oxen_engine import build_sql_json
+                import json as _json
+                built = build_sql_json(_json.dumps(ir))
+                query = built.get('sql')
+                params = built.get('params')
+            except Exception:
+                quoted_table = f'"{self.model._meta.table_name}"'
+                select_cols = ', '.join([f'"{c}"' for c in fields])
+                query = f"SELECT {select_cols} FROM {quoted_table}"
+                params = []
+            result = await db.execute_query(query, params if params else None)
+            if result.get('error') is not None:
+                raise OperationalError(f"Failed to execute values_list query: {result.get('error', 'Unknown error')}")
+            rows = result.get('data', []) or []
+
+        # Normalize rows: engine typically returns list[dict]
+        def row_to_list(r: Any) -> list[Any]:
+            if isinstance(r, dict):
+                return [r.get(col) for col in fields]
+            if isinstance(r, (list, tuple)):
+                return list(r)
+            return [r]
+
+        values = [row_to_list(r) for r in rows]
+        if self._flat:
+            values = [v[0] if v else None for v in values]
+        if self._single:
+            if not values:
+                if getattr(self, '_raise_does_not_exist', False):
+                    raise DoesNotExist(f"No {self.model.__name__} matches the given query.")
+                return None if self._flat else []
+            return values[0]
+        return values
 
 class ValuesQuery(AwaitableQuery, Generic[SINGLE]):
     """Query for returning values as dictionaries."""
-    pass
+    def __init__(
+        self,
+        model: type[MODEL],
+        db: Any = None,
+        q_objects: list[Q] | None = None,
+        single: bool = False,
+        raise_does_not_exist: bool = False,
+        fields_for_select: dict[str, str] | None = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        distinct: bool = False,
+        orderings: list[tuple[str, Order]] | None = None,
+        annotations: dict[str, Any] | None = None,
+        custom_filters: dict[str, Any] | None = None,
+        group_bys: tuple[str, ...] | None = None,
+        force_indexes: set[str] | None = None,
+        use_indexes: set[str] | None = None,
+    ) -> None:
+        super().__init__(model)
+        self._db = db
+        self._q_objects = q_objects or []
+        self._single = single
+        self._raise_does_not_exist = raise_does_not_exist
+        self._fields_map = fields_for_select or {}
+        self._limit = limit
+        self._offset = offset
+        self._distinct = distinct
+        self._orderings = orderings or []
+        self._annotations = annotations or {}
+        self._custom_filters = custom_filters or {}
+        self._group_bys = group_bys or ()
+        self._force_indexes = force_indexes or set()
+        self._use_indexes = use_indexes or set()
+
+    def __await__(self) -> Generator[Any, None, Any]:
+        async def _self() -> Any:
+            return await self._execute()
+        return _self().__await__()
+
+    async def _execute(self) -> Any:
+        db = self._choose_db()
+        if not db:
+            raise OperationalError("No database connection available")
+
+        # Build conditions
+        conditions: dict[str, Any] = {}
+        for q_obj in self._q_objects:
+            if hasattr(q_obj, 'filters'):
+                conditions.update(q_obj.filters)
+            elif hasattr(q_obj, 'children'):
+                for child in q_obj.children:
+                    if hasattr(child, 'filters'):
+                        conditions.update(child.filters)
+                    elif isinstance(child, dict):
+                        conditions.update(child)
+            elif isinstance(q_obj, dict):
+                conditions.update(q_obj)
+            else:
+                try:
+                    conditions.update(dict(q_obj))
+                except Exception:
+                    pass
+
+        # Determine select list with aliases
+        if self._fields_map:
+            fields = []
+            aliases = []
+            for alias, field_name in self._fields_map.items():
+                # Use raw "field AS alias" so builder preserves alias
+                fields.append(f"{field_name} AS {alias}")
+                aliases.append(alias)
+        else:
+            # Default to all columns
+            fields = ["*"]
+            aliases = []
+
+        # Determine dialect
+        conn_str = (getattr(db, 'connection_string', '') or getattr(db, '_connection_string', '')).lower()
+        dialect = 'postgres' if 'postgresql' in conn_str else ('mysql' if 'mysql' in conn_str else 'sqlite')
+
+        # Build filters IR
+        filters: list[dict[str, Any]] = []
+        for key, value in conditions.items():
+            if '__' in key:
+                field_name, lookup = key.split('__', 1)
+                if lookup == 'startswith':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"{value}%"})
+                elif lookup == 'istartswith':
+                    filters.append({'field': field_name, 'op': 'ilike', 'value': f"{value}%"})
+                elif lookup == 'endswith':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"%{value}"})
+                elif lookup == 'iendswith':
+                    filters.append({'field': field_name, 'op': 'ilike', 'value': f"%{value}"})
+                elif lookup == 'contains':
+                    filters.append({'field': field_name, 'op': 'like', 'value': f"%{value}%"})
+                elif lookup == 'icontains':
+                    filters.append({'field': field_name, 'op': 'ilike', 'value': f"%{value}%"})
+                elif lookup in ('lt','lte','gt','gte','in','ne','not_in','nin','isnull','notnull'):
+                    filters.append({'field': field_name, 'op': lookup, 'value': value})
+                else:
+                    filters.append({'field': field_name, 'op': 'eq', 'value': value})
+            else:
+                filters.append({'field': key, 'op': 'eq', 'value': value})
+
+        order_by = [
+            {'field': field, 'direction': direction.value}
+            for field, direction in self._orderings
+        ]
+
+        ir = {
+            'dialect': dialect,
+            'table': self.model._meta.table_name,
+            'select': fields,
+            'distinct': bool(self._distinct),
+            'filters': filters,
+            'order_by': order_by,
+            'limit': self._limit or (1 if self._single else None),
+            'offset': self._offset,
+        }
+
+        # Prefer compiled columns fast path: fetch dict[column]->list once, then build row dicts in Python
+        if hasattr(db, '_rust_engine'):
+            try:
+                cols = None
+                if hasattr(db._rust_engine, 'execute_ir_compiled_columns'):
+                    cols = await db._rust_engine.execute_ir_compiled_columns(ir)  # type: ignore[attr-defined]
+                elif hasattr(db._rust_engine, 'execute_ir_columns'):
+                    cols = await db._rust_engine.execute_ir_columns(ir)  # type: ignore[attr-defined]
+                if isinstance(cols, dict) and cols:
+                    # Determine the output column order (aliases if provided)
+                    out_cols = list(self._fields_map.keys()) if self._fields_map else list(cols.keys())
+                    # Build list[dict] row-wise from columns
+                    row_count = len(next(iter(cols.values()))) if cols else 0
+                    data: list[dict[str, Any]] = []
+                    for i in range(row_count):
+                        row: dict[str, Any] = {}
+                        for c in out_cols:
+                            # When aliases used, column keys are aliases
+                            row[c] = cols.get(c, [None] * row_count)[i]
+                        data.append(row)
+                    if self._single:
+                        if not data:
+                            if getattr(self, '_raise_does_not_exist', False):
+                                raise DoesNotExist(f"No {self.model.__name__} matches the given query.")
+                            return None
+                        return data[0]
+                    return data
+            except Exception:
+                pass
+
+        # Prefer single-hop IR execution
+        if hasattr(db, '_rust_engine'):
+            try:
+                res = await db._rust_engine.execute_ir(ir)  # type: ignore[attr-defined]
+                rows = res.get('data', []) if isinstance(res, dict) else []
+            except Exception:
+                rows = None
+        else:
+            rows = None
+        if rows is None:
+            try:
+                from oxen_engine import build_sql_json
+                import json as _json
+                built = build_sql_json(_json.dumps(ir))
+                query = built.get('sql')
+                params = built.get('params')
+            except Exception:
+                quoted_table = f'"{self.model._meta.table_name}"'
+                select_cols = ', '.join([f'"{c}"' for c in (aliases or [])]) if aliases else '*'
+                query = f"SELECT {select_cols} FROM {quoted_table}"
+                params = []
+            result = await db.execute_query(query, params if params else None)
+            if result.get('error') is not None:
+                raise OperationalError(f"Failed to execute values query: {result.get('error', 'Unknown error')}")
+            rows = result.get('data', []) or []
+
+        # If aliases were used, ensure dict keys align
+        def to_dict(r: Any) -> dict[str, Any]:
+            if isinstance(r, dict):
+                return r
+            if isinstance(r, (list, tuple)) and aliases:
+                return {alias: r[i] for i, alias in enumerate(aliases)}
+            return {'value': r}
+
+        data = [to_dict(r) for r in rows]
+        if self._single:
+            if not data:
+                if getattr(self, '_raise_does_not_exist', False):
+                    raise DoesNotExist(f"No {self.model.__name__} matches the given query.")
+                return None
+            return data[0]
+        return data
 
 class RawSQLQuery(AwaitableQuery):
     """Query for executing raw SQL."""
-    pass
+    def __init__(self, model: type[MODEL], db: Any = None, sql: str = "") -> None:
+        super().__init__(model)
+        self._db = db
+        self._sql = sql
+
+    def __await__(self) -> Generator[Any, None, list[dict[str, Any]]]:
+        async def _self() -> list[dict[str, Any]]:
+            return await self._execute()
+        return _self().__await__()
+
+    async def _execute(self) -> list[dict[str, Any]]:
+        db = self._choose_db()
+        if not db:
+            raise OperationalError("No database connection available")
+        result = await db.execute_query(self._sql)
+        if result.get('error') is not None:
+            raise OperationalError(f"Failed to execute raw SQL: {result.get('error', 'Unknown error')}")
+        return result.get('data', []) or []
 
 class BulkUpdateQuery(UpdateQuery, Generic[MODEL]):
     """Query for bulk updating objects."""

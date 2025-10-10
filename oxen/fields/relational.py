@@ -303,3 +303,67 @@ class ManyToManyField(RelationalField):
         """Get the SQL type for this field."""
         # Many-to-many fields don't create columns in the main table
         return "TEXT" 
+
+    def get_through_table_name(self, owner_model: Type[Any], field_name: str) -> str:
+        """Derive the through table name when not explicitly provided."""
+        if self.through:
+            if isinstance(self.through, str):
+                return self.through
+            return self.through._meta.table_name
+        target_model = self._get_related_model()
+        a = owner_model._meta.table_name
+        b = target_model._meta.table_name
+        parts = sorted([a, b])
+        return f"{parts[0]}_{parts[1]}_{field_name}"
+
+    async def add(self, instance: Any, *related_instances: Any) -> None:
+        """Add relations into the through table."""
+        engine = instance._meta.db
+        if not engine:
+            from oxen.exceptions import OperationalError
+            raise OperationalError("No database connection available")
+        table = self.get_through_table_name(type(instance), self.model_field_name)
+        owner_fk = f"{type(instance)._meta.table_name}_id"
+        target_fk = f"{self._get_related_model()._meta.table_name}_id"
+        # Ensure through table exists (id + two fk columns)
+        try:
+            ddl = f"CREATE TABLE IF NOT EXISTS \"{table}\" (id INTEGER PRIMARY KEY AUTOINCREMENT, \"{owner_fk}\" BIGINT, \"{target_fk}\" BIGINT)"
+            await engine.execute_query(ddl)
+        except Exception:
+            pass
+        rows = []
+        for rel in related_instances:
+            rel_id = rel.pk if hasattr(rel, 'pk') else rel
+            rows.append({owner_fk: instance.pk, target_fk: rel_id})
+        if rows:
+            # Use insert-many via engine helper if present
+            if hasattr(engine, 'insert_many'):
+                await engine.insert_many(table, rows)
+            else:
+                for r in rows:
+                    cols = list(r.keys())
+                    placeholders = ["?" for _ in cols]
+                    sql = f"INSERT INTO \"{table}\" (" + ", ".join([f'\"{c}\"' for c in cols]) + ") VALUES (" + ", ".join(placeholders) + ")"
+                    await engine.execute_query(sql, list(r.values()))
+
+    async def remove(self, instance: Any, *related_instances: Any) -> None:
+        """Remove relations from the through table."""
+        engine = instance._meta.db
+        table = self.get_through_table_name(type(instance), self.model_field_name)
+        owner_fk = f"{type(instance)._meta.table_name}_id"
+        target_fk = f"{self._get_related_model()._meta.table_name}_id"
+        rel_ids = [ri.pk if hasattr(ri, 'pk') else ri for ri in related_instances]
+        if not rel_ids:
+            return
+        # Build delete
+        placeholders = ", ".join(["?" for _ in rel_ids])
+        sql = f"DELETE FROM \"{table}\" WHERE \"{owner_fk}\" = ? AND \"{target_fk}\" IN (" + placeholders + ")"
+        await engine.execute_query(sql, [instance.pk, *rel_ids])
+
+    async def clear(self, instance: Any) -> None:
+        """Clear all relations for an instance."""
+        engine = instance._meta.db
+        table = self.get_through_table_name(type(instance), self.model_field_name)
+        owner_fk = f"{type(instance)._meta.table_name}_id"
+        sql = f"DELETE FROM \"{table}\" WHERE \"{owner_fk}\" = ?"
+        await engine.execute_query(sql, [instance.pk])

@@ -36,6 +36,7 @@ from oxen.engine import get_default_engine
 from oxen.manager import Manager
 from oxen.signals import Signals
 from oxen.validators import Validator
+from oxen.schema import ensure_table_exists_for_model
 
 MODEL = TypeVar("MODEL", bound="Model")
 EMPTY = object()
@@ -96,7 +97,7 @@ class MetaInfo:
         if hasattr(field_obj, 'generated') and field_obj.generated:
             self.generated_db_fields.add(name)
         
-        if field_obj.has_db_field:
+        if field_obj.has_db_field or getattr(field_obj, 'is_relational', False):
             self.db_fields.append(name)
             self.fields_db_projection[name] = field_obj.source_field or name
 
@@ -237,9 +238,10 @@ class Model(metaclass=ModelMeta):
         if hasattr(self, "_await_when_save"):
             self._await_when_save.pop(key, None)
         
-        # Validate relational fields
+        # Validate relational fields (accept pk primitives and lazy objects too)
         if key in self._meta.fk_fields or key in self._meta.o2o_fields:
-            self._validate_relation_type(key, value)
+            if value is not None and not isinstance(value, (int, str)) and not hasattr(value, 'pk') and not hasattr(value, 'pk_value'):
+                self._validate_relation_type(key, value)
         
         super().__setattr__(key, value)
 
@@ -250,12 +252,14 @@ class Model(metaclass=ModelMeta):
 
         for key, value in kwargs.items():
             if key in meta.fk_fields or key in meta.o2o_fields:
-                if value and not value._saved_in_db:
-                    raise OperationalError(
-                        f"You should first call .save() on {value} before referring to it"
-                    )
+                # Accept model instance or raw PK (int/str). Only enforce saved check for instances.
+                if hasattr(value, '_saved_in_db'):
+                    if value and not value._saved_in_db:
+                        raise OperationalError(
+                            f"You should first call .save() on {value} before referring to it"
+                        )
                 setattr(self, key, value)
-                passed_fields.add(meta.fields_map[key].source_field)
+                passed_fields.add(key)
             elif key in meta.fields_db_projection:
                 field_object = meta.fields_map[key]
                 if field_object.primary_key and field_object.generated:
@@ -292,12 +296,18 @@ class Model(metaclass=ModelMeta):
         
         # Set all fields using their from_db_value method
         for key, value in kwargs.items():
-            if key in meta.fields_map:
-                field = meta.fields_map[key]
-                setattr(self, key, field.from_db_value(value))
+            attr = key
+            if key not in meta.fields_map and key in meta.fields_db_projection.values():
+                # Map DB column to model field
+                for k2, v2 in meta.fields_db_projection.items():
+                    if v2 == key:
+                        attr = k2
+                        break
+            if attr in meta.fields_map:
+                field = meta.fields_map[attr]
+                setattr(self, attr, field.from_db_value(value))
             else:
-                # Handle unknown fields gracefully
-                setattr(self, key, value)
+                setattr(self, attr, value)
 
         return self
 
@@ -455,14 +465,25 @@ class Model(metaclass=ModelMeta):
             # Prepare data for insertion
             data = {}
             for field_name in self._meta.db_fields:
+                field_obj = self._meta.fields_map.get(field_name)
+                # For relational fields, column is the FK id under the same name
                 value = getattr(self, field_name, None)
-                if value is not None:
-                    # Convert value using field's to_db_value method
-                    field_obj = self._meta.fields_map.get(field_name)
-                    if field_obj:
-                        data[field_name] = field_obj.to_db_value(value)
+                if value is None:
+                    # Skip None; engine/DB may have defaults
+                    continue
+                if field_obj:
+                    # Normalize relational values: accept model instance, LazyRelatedObject, or raw id
+                    if hasattr(field_obj, 'is_relational') and field_obj.is_relational:
+                        if hasattr(value, 'pk'):
+                            data[field_name] = value.pk
+                        elif hasattr(value, 'pk_value'):
+                            data[field_name] = value.pk_value
+                        else:
+                            data[field_name] = value
                     else:
-                        data[field_name] = value
+                        data[field_name] = field_obj.to_db_value(value)
+                else:
+                    data[field_name] = value
             
             # Insert into database
             result = await db.insert_record(self._meta.table_name, data)
@@ -470,8 +491,40 @@ class Model(metaclass=ModelMeta):
             # Check if insert was successful (no error)
             if result.get('error') is None:
                 # Set the primary key if it was generated
-                if 'id' in result.get('data', {}):
-                    self.pk = result['data']['id']
+                rid = result.get('data', {}).get('id') if isinstance(result.get('data'), dict) else None
+                if rid:
+                    self.pk = rid
+                else:
+                    # Fallbacks to resolve pk across dialects
+                    try:
+                        conn = (getattr(db, 'connection_string', '') or getattr(db, '_connection_string', '')).lower()
+                        lid = None
+                        if 'sqlite' in conn:
+                            sel = await db.execute_query("SELECT last_insert_rowid() AS id")
+                            if sel.get('error') is None and sel.get('data'):
+                                lid = sel['data'][0].get('id')
+                        elif 'postgresql' in conn:
+                            # Prefer unique field lookup if available
+                            unique_filters = {}
+                            for fname, fobj in self._meta.fields_map.items():
+                                if getattr(fobj, 'unique', False):
+                                    val = getattr(self, fname, None)
+                                    if val is not None:
+                                        unique_filters[fname] = val
+                            if unique_filters:
+                                sel = await db.select_records(self._meta.table_name, unique_filters, limit=1)
+                                if sel.get('error') is None and sel.get('data'):
+                                    lid = sel['data'][0].get('id')
+                            if lid is None:
+                                # Best-effort last id from table
+                                q = f'SELECT id FROM "{self._meta.table_name}" ORDER BY id DESC LIMIT 1'
+                                sel = await db.execute_query(q)
+                                if sel.get('error') is None and sel.get('data'):
+                                    lid = sel['data'][0].get('id')
+                        if isinstance(lid, (int, float)) and lid:
+                            self.pk = int(lid)
+                    except Exception:
+                        pass
                 self._saved_in_db = True
             else:
                 raise OperationalError(f"Failed to insert record: {result.get('error', 'Unknown error')}")
@@ -546,6 +599,13 @@ class Model(metaclass=ModelMeta):
     def _set_rust_engine(cls, engine: Any) -> None:
         """Set the Rust engine for this model."""
         cls._meta.db = engine
+        # Auto-sync: ensure table exists for this model (create-only)
+        try:
+            # Create table if missing and add any new columns
+            from oxen.schema import sync_model
+            sync_model(engine, cls)
+        except Exception:
+            pass
 
     @classmethod
     async def get_or_create(
@@ -711,13 +771,15 @@ class Model(metaclass=ModelMeta):
         
         # Check if bulk insert was successful (no error)
         if result.get('error') is None:
-            # Set primary keys for the created objects
-            last_id = result.get('last_id', 0)
+            # Prefer explicit IDs returned by insert_many
+            ids = []
+            data = result.get('data')
+            if isinstance(data, dict):
+                ids = data.get('ids') or []
             for i, obj in enumerate(objects):
                 obj._saved_in_db = True
-                # Set the primary key (assuming auto-incrementing ID)
-                if last_id > 0:
-                    obj.pk = last_id - len(objects) + 1 + i
+                if i < len(ids) and isinstance(ids[i], (int, float)):
+                    obj.pk = int(ids[i])
             return objects
         else:
             raise OperationalError(f"Failed to bulk create records: {result.get('error', 'Unknown error')}")
@@ -733,32 +795,44 @@ class Model(metaclass=ModelMeta):
         db = using_db or cls._choose_db(for_write=True)
         if not db:
             raise OperationalError("No database connection available")
-        
-        updated_count = 0
+
+        # Optimized CASE-based bulk update for per-id differing values
+        # Validate all objects have pk
+        id_list: list[Any] = []
         for obj in objects:
             if not obj.pk:
                 raise IntegrityError("Cannot update model without primary key")
-            
-            # Prepare update data
-            update_data = {}
-            for field_name in fields:
-                if hasattr(obj, field_name):
-                    value = getattr(obj, field_name)
-                    if value is not None:
-                        update_data[field_name] = value
-            
-            if update_data:
-                # Execute update
-                result = await db.update_records(
-                    cls._meta.table_name,
-                    update_data,
-                    {cls._meta.pk_attr: obj.pk}
-                )
-                
-                if result.get('error') is None:
-                    updated_count += result.get('rows_affected', 0)
-        
-        return updated_count
+            id_list.append(obj.pk)
+
+        if not fields:
+            return 0
+
+        # Build CASE expressions per field
+        table = cls._meta.table_name
+        set_clauses: list[str] = []
+        params: list[Any] = []
+        for field_name in fields:
+            # CASE "field" WHEN id THEN value ... ELSE "field" END
+            cases: list[str] = []
+            field_col = f'"{field_name}"'
+            for obj in objects:
+                val = getattr(obj, field_name, None)
+                cases.append("WHEN ? THEN ?")
+                params.append(obj.pk)
+                params.append(val)
+            case_sql = f"{field_col} = CASE \"{cls._meta.pk_attr}\" " + " ".join(cases) + f" ELSE {field_col} END"
+            set_clauses.append(case_sql)
+
+        # WHERE id IN (...)
+        placeholders = ", ".join(["?" for _ in id_list])
+        where_sql = f'"{cls._meta.pk_attr}" IN ({placeholders})'
+        params.extend(id_list)
+        sql = f'UPDATE "{table}" SET ' + ", ".join(set_clauses) + f" WHERE {where_sql}"
+
+        result = await db.execute_query(sql, params)
+        if result.get('error') is None:
+            return int(result.get('rows_affected', 0))
+        return 0
 
     @classmethod
     async def bulk_delete(

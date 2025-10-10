@@ -1,0 +1,2 @@
+✅ Rust backend initialized for: sqlite:////Users/developer/Desktop/OxenORM/smoke_test.db
+✅ Rust backend initialized for: sqlite:////Users/developer/Desktop/OxenORM/smoke_test.db

@@ -1,18 +1,16 @@
 version: '3.8'
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: oxen_mysql
+  postgres:
+    image: postgres:16
+    container_name: oxen_postgres
     environment:
-      MYSQL_ROOT_PASSWORD: oxenorm
-      MYSQL_DATABASE: oxenorm
-      MYSQL_USER: oxenorm
-      MYSQL_PASSWORD: oxenorm
+      POSTGRES_USER: oxenorm
+      POSTGRES_PASSWORD: oxenorm
+      POSTGRES_DB: oxenorm
     ports:
-      - '3306:3306'
-    command: [--default-authentication-plugin=mysql_native_password, --max_connections=200]
+      - '5432:5432'
     healthcheck:
-      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '-uoxenorm', '-poxenorm']
+      test: ['CMD-SHELL', 'pg_isready -U oxenorm']
       interval: 5s
       timeout: 5s
       retries: 20

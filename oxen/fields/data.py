@@ -161,7 +161,7 @@ class BooleanField(Field):
         raise ValidationError(f"BooleanField must be a boolean, got {type(value)}")
     
     def to_db_value(self, value: Any) -> Any:
-        return 1 if value else 0 if value is not None else None
+        return bool(value) if value is not None else None
     
     def from_db_value(self, value: Any) -> Any:
         return bool(value) if value is not None else None

@@ -2,6 +2,14 @@
 pytest
 pytest-asyncio
 pytest-cov
+fastapi
+uvicorn
+httpx
+sqlalchemy
+tortoise-orm
+django
+asyncpg
+aiosqlite
 
 # Optional: For better development experience
 black

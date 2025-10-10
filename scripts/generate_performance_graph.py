@@ -10,34 +10,75 @@ import numpy as np
 import seaborn as sns
 from matplotlib.patches import Rectangle
 import os
+import json
 
 # Set style for better looking graphs
 plt.style.use('seaborn-v0_8')
 sns.set_palette("husl")
 
-def create_performance_comparison_chart():
-    """Create the main performance comparison chart"""
-    
-    # Performance data (QPS - Queries Per Second)
-    orms = ['SQLAlchemy 2.0', 'Tortoise ORM', 'Django ORM', 'OxenORM']
-    
-    # Simple Select operations
-    simple_select = [1000, 800, 600, 15000]
-    
-    # Complex Join operations
-    complex_join = [500, 400, 300, 8000]
-    
-    # Bulk Insert operations
-    bulk_insert = [2000, 1500, 1200, 25000]
-    
-    # Aggregation operations
-    aggregation = [300, 250, 200, 5000]
-    
-    # File operations
-    file_ops = [100, 80, 60, 2000]
-    
-    # Image processing
-    image_ops = [50, 40, 30, 1500]
+def create_performance_comparison_chart(from_json: str | None = None):
+    """Create the main performance comparison chart. If from_json is provided, parse data from the benchmark JSON."""
+
+    if from_json and os.path.exists(from_json):
+        # Clean potential non-JSON prelude lines in CI artifacts
+        with open(from_json, 'r') as f:
+            raw = f.read()
+        raw_stripped = raw.lstrip()
+        try:
+            data = json.loads(raw_stripped)
+        except Exception:
+            # try to find first '{' occurrence
+            idx = raw_stripped.find('{')
+            if idx != -1:
+                data = json.loads(raw_stripped[idx:])
+            else:
+                raise
+        # Map data into categories
+        # Read one/many
+        oxen_read_one = next((d['qps'] for d in data.get('oxen', []) if d['name'] == 'oxen_read_one'), None)
+        oxen_read_many = next((d['qps'] for d in data.get('oxen', []) if d['name'] == 'oxen_read_many'), None)
+        sa_read_one = next((d['qps'] for d in data.get('sqlalchemy', []) if d['name'] == 'sqlalchemy_read_one'), None)
+        sa_read_many = next((d['qps'] for d in data.get('sqlalchemy', []) if d['name'] == 'sqlalchemy_read_many'), None)
+        dj_read_one = next((d['qps'] for d in data.get('django', []) if d['name'] == 'django_read_one'), None)
+        dj_read_many = next((d['qps'] for d in data.get('django', []) if d['name'] == 'django_read_many'), None)
+        tt_read_one = next((d['qps'] for d in data.get('tortoise', []) if d['name'] == 'tortoise_read_one'), None)
+        tt_read_many = next((d['qps'] for d in data.get('tortoise', []) if d['name'] == 'tortoise_read_many'), None)
+
+        # Join
+        oxen_join = next((d['qps'] for d in data.get('oxen_ext', []) if d['name'] == 'oxen_join_select_related'), None)
+        sa_join = next((d['qps'] for d in data.get('sqlalchemy_ext', []) if d['name'] == 'sa_join_eager'), None)
+        dj_join = next((d['qps'] for d in data.get('django_ext', []) if d['name'] == 'django_join_select_related'), None)
+        tt_join = next((d['qps'] for d in data.get('tortoise_ext', []) if d['name'] == 'tortoise_read_many_again'), None)
+
+        # Aggregation/window
+        oxen_window = next((d['qps'] for d in data.get('oxen_ext', []) if d['name'] == 'oxen_window_count'), None)
+        sa_window = next((d['qps'] for d in data.get('sqlalchemy_ext', []) if d['name'] == 'sa_window_count'), None)
+        dj_agg = next((d['qps'] for d in data.get('django_ext', []) if d['name'] == 'django_aggregate_count'), None)
+        tt_agg = next((d['qps'] for d in data.get('tortoise_ext', []) if d['name'] == 'tortoise_aggregate_count'), None)
+
+        # Bulk insert/update
+        oxen_bulk_ins = next((d['qps'] for d in data.get('oxen_ext', []) if d['name'] == 'oxen_bulk_insert_200'), None)
+        sa_bulk_ins = next((d['qps'] for d in data.get('sqlalchemy_ext', []) if d['name'] == 'sa_bulk_insert_200'), None)
+        dj_bulk_ins = next((d['qps'] for d in data.get('django_ext', []) if d['name'] == 'django_bulk_insert_200'), None)
+        tt_bulk_ins = next((d['qps'] for d in data.get('tortoise_ext', []) if d['name'] == 'tortoise_bulk_insert_200'), None)
+
+        oxen_bulk_upd = next((d['qps'] for d in data.get('oxen_ext', []) if d['name'] == 'oxen_bulk_update_all'), None)
+        sa_bulk_upd = next((d['qps'] for d in data.get('sqlalchemy_ext', []) if d['name'] == 'sa_bulk_update_all'), None)
+        dj_bulk_upd = next((d['qps'] for d in data.get('django_ext', []) if d['name'] == 'django_bulk_update_all'), None)
+        tt_bulk_upd = next((d['qps'] for d in data.get('tortoise_ext', []) if d['name'] == 'tortoise_bulk_update_all'), None)
+
+        orms = ['SQLAlchemy 2.0', 'Tortoise ORM', 'Django ORM', 'OxenORM']
+        simple_select = [sa_read_one or 0, tt_read_one or 0, dj_read_one or 0, oxen_read_one or 0]
+        complex_join = [sa_join or 0, tt_join or 0, dj_join or 0, oxen_join or 0]
+        bulk_insert = [sa_bulk_ins or 0, tt_bulk_ins or 0, dj_bulk_ins or 0, oxen_bulk_ins or 0]
+        aggregation = [sa_window or 0, tt_agg or 0, dj_agg or 0, oxen_window or 0]
+    else:
+        # Fallback demo values if JSON not present
+        orms = ['SQLAlchemy 2.0', 'Tortoise ORM', 'Django ORM', 'OxenORM']
+        simple_select = [2500, 1600, 2200, 1400]
+        complex_join = [1100, 1670, 1130, 1650]
+        bulk_insert = [126, 166, 82, 44]
+        aggregation = [2700, 1430, 2358, 1800]
     
     # Set up the figure
     fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6)) = plt.subplots(3, 2, figsize=(15, 18))
@@ -91,27 +132,21 @@ def create_performance_comparison_chart():
         ax4.text(bar.get_x() + bar.get_width()/2., height + 30,
                 f'{value:,}', ha='center', va='bottom', fontweight='bold')
     
-    # 5. File Operations Performance
-    bars5 = ax5.bar(orms, file_ops, color=colors, alpha=0.8, edgecolor='black', linewidth=1)
-    ax5.set_title('File Operations (OPS)', fontsize=14, fontweight='bold')
+    # 5. Bulk Update Performance
+    bars5 = ax5.bar(orms, [sa_bulk_upd or 0, tt_bulk_upd or 0, dj_bulk_upd or 0, oxen_bulk_upd or 0], color=colors, alpha=0.8, edgecolor='black', linewidth=1)
+    ax5.set_title('Bulk Update (QPS)', fontsize=14, fontweight='bold')
     ax5.set_ylabel('Operations Per Second', fontsize=12)
     ax5.tick_params(axis='x', rotation=45)
-    
-    for bar, value in zip(bars5, file_ops):
-        height = bar.get_height()
-        ax5.text(bar.get_x() + bar.get_width()/2., height + 20,
-                f'{value:,}', ha='center', va='bottom', fontweight='bold')
-    
-    # 6. Image Processing Performance
-    bars6 = ax6.bar(orms, image_ops, color=colors, alpha=0.8, edgecolor='black', linewidth=1)
-    ax6.set_title('Image Processing Operations (OPS)', fontsize=14, fontweight='bold')
-    ax6.set_ylabel('Operations Per Second', fontsize=12)
+    for bar, value in zip(bars5, [sa_bulk_upd or 0, tt_bulk_upd or 0, dj_bulk_upd or 0, oxen_bulk_upd or 0]):
+        height = bar.get_height(); ax5.text(bar.get_x() + bar.get_width()/2., height + 20, f'{value:,.0f}', ha='center', va='bottom', fontweight='bold')
+
+    # 6. Read Many Performance (limit 50)
+    bars6 = ax6.bar(orms, [sa_read_many or 0, tt_read_many or 0, dj_read_many or 0, oxen_read_many or 0], color=colors, alpha=0.8, edgecolor='black', linewidth=1)
+    ax6.set_title('Read Many (limit 50) (QPS)', fontsize=14, fontweight='bold')
+    ax6.set_ylabel('Queries Per Second', fontsize=12)
     ax6.tick_params(axis='x', rotation=45)
-    
-    for bar, value in zip(bars6, image_ops):
-        height = bar.get_height()
-        ax6.text(bar.get_x() + bar.get_width()/2., height + 15,
-                f'{value:,}', ha='center', va='bottom', fontweight='bold')
+    for bar, value in zip(bars6, [sa_read_many or 0, tt_read_many or 0, dj_read_many or 0, oxen_read_many or 0]):
+        height = bar.get_height(); ax6.text(bar.get_x() + bar.get_width()/2., height + 20, f'{value:,.0f}', ha='center', va='bottom', fontweight='bold')
     
     # Add speedup annotations
     speedups = [15, 16, 12.5, 16.7, 20, 30]
@@ -320,7 +355,8 @@ def main():
     print("=" * 50)
     
     # Create all charts
-    create_performance_comparison_chart()
+    json_path = os.environ.get('OXEN_BENCH_JSON', 'benchmarks/final_results.json')
+    create_performance_comparison_chart(from_json=json_path)
     create_architecture_performance_diagram()
     create_feature_comparison_chart()
     

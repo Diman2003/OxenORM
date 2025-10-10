@@ -655,25 +655,62 @@ async def main():
     """Main benchmark function."""
     print("🚀 Starting OxenORM Performance Benchmark Suite")
     print("="*60)
-    
+
+    # Env-driven config for CI
+    db_url = os.environ.get('OXEN_BENCH_DB', 'sqlite:///benchmark.db')
+    only_framework = os.environ.get('OXEN_BENCH_ONLY')  # 'oxenorm'|'tortoise'|'sqlalchemy'
+    record_counts_env = os.environ.get('OXEN_BENCH_COUNTS', '100,1000,10000')
+    output_file = os.environ.get('OXEN_BENCH_OUT')  # optional path under benchmarks/
+    try:
+        record_counts = [int(x.strip()) for x in record_counts_env.split(',') if x.strip()]
+    except Exception:
+        record_counts = [100, 1000, 10000]
+
     # Check available frameworks
     print("\n📋 Available Frameworks:")
     print(f"  OxenORM: {'✅' if OXENORM_AVAILABLE else '❌'}")
     print(f"  Tortoise ORM: {'✅' if TORTOISE_AVAILABLE else '❌'}")
     print(f"  SQLAlchemy: {'✅' if SQLALCHEMY_AVAILABLE else '❌'}")
     print(f"  Django ORM: {'✅' if DJANGO_AVAILABLE else '❌'}")
-    
+
     if not any([OXENORM_AVAILABLE, TORTOISE_AVAILABLE, SQLALCHEMY_AVAILABLE]):
         print("\n❌ No ORM frameworks available for benchmarking!")
         return
-    
+
     # Run benchmarks
-    benchmark = PerformanceBenchmark("sqlite:///benchmark.db")
-    suite = await benchmark.run_benchmarks([100, 1000, 10000])
-    
+    benchmark = PerformanceBenchmark(db_url)
+    suite = await benchmark.run_benchmarks(record_counts)
+
+    # Optionally filter frameworks post-run if only one requested
+    if only_framework:
+        only_name = {
+            'oxenorm': 'OxenORM',
+            'tortoise': 'Tortoise ORM',
+            'sqlalchemy': 'SQLAlchemy',
+        }.get(only_framework.lower())
+        if only_name:
+            suite.results = [r for r in suite.results if r.framework == only_name]
+            suite.calculate_summary()
+
     # Print and save results
     benchmark.print_summary(suite)
-    benchmark.save_results(suite)
+    if output_file:
+        Path('benchmarks').mkdir(exist_ok=True)
+        # store exactly where asked
+        if not output_file.startswith('benchmarks/'):
+            output_path = f"benchmarks/{output_file}"
+        else:
+            output_path = output_file
+        with open(output_path, 'w') as f:
+            json.dump({
+                'suite_name': suite.name,
+                'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
+                'results': [r.__dict__ for r in suite.results],
+                'summary': suite.summary
+            }, f, indent=2)
+        print(f"\n💾 Results saved to {output_path}")
+    else:
+        benchmark.save_results(suite)
 
 
 if __name__ == "__main__":

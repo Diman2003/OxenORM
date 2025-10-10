@@ -35,6 +35,208 @@ use pyo3::types::PyDateTime as PyDT;
 use pyo3::types::PyDate as PyD;
 use pyo3::types::PyTime as PyT;
 use std::str::FromStr;
+use std::sync::Mutex;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use lru::LruCache;
+use std::num::NonZeroUsize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RowFactory {
+    Tuples,
+    Dicts,
+    Models,
+    Columns,
+    Arrow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ParamType {
+    Null, Bool, I64, F64, Str, Bytes, Uuid, Dec, Json, Date, Time, DateTime,
+    ArrayStr, ArrayI64, ArrayF64, ArrayBool,
+}
+
+impl ParamType {
+    fn from_paramvalue(pv: &ParamValue) -> Self {
+        match pv {
+            ParamValue::Null => ParamType::Null,
+            ParamValue::Bool(_) => ParamType::Bool,
+            ParamValue::I64(_) => ParamType::I64,
+            ParamValue::F64(_) => ParamType::F64,
+            ParamValue::Str(_) => ParamType::Str,
+            ParamValue::Bytes(_) => ParamType::Bytes,
+            ParamValue::Uuid(_) => ParamType::Uuid,
+            ParamValue::Dec(_) => ParamType::Dec,
+            ParamValue::Json(_) => ParamType::Json,
+            ParamValue::Date(_) => ParamType::Date,
+            ParamValue::Time(_) => ParamType::Time,
+            ParamValue::DateTime(_) => ParamType::DateTime,
+            ParamValue::ArrayStr(_) => ParamType::ArrayStr,
+            ParamValue::ArrayI64(_) => ParamType::ArrayI64,
+            ParamValue::ArrayF64(_) => ParamType::ArrayF64,
+            ParamValue::ArrayBool(_) => ParamType::ArrayBool,
+        }
+    }
+}
+
+// Helper functions for row materialization
+fn build_pyrows_from_sqlx_py(py: Python, colname_cache: &Mutex<HashMap<String, Py<PyString>>>, rows: &[sqlx::postgres::PgRow]) -> Vec<PyObject> {
+    let mut result = Vec::with_capacity(rows.len());
+    let mut cache_guard = colname_cache.lock().unwrap();
+    
+    for row in rows {
+        let mut row_dict = PyDict::new(py);
+        for (i, col) in row.columns().iter().enumerate() {
+            let col_name = col.name();
+            let py_col_name = cache_guard.entry(col_name.to_string()).or_insert_with(|| PyString::new(py, col_name).into_py(py));
+            
+            let value = extract_postgres_value_py(py, row, i);
+            row_dict.set_item(py_col_name.as_ref(py), value).unwrap();
+        }
+        result.push(row_dict.into_py(py));
+    }
+    result
+}
+
+fn build_pyrows_from_sqlx_py_mysql(py: Python, colname_cache: &Mutex<HashMap<String, Py<PyString>>>, rows: &[sqlx::mysql::MySqlRow]) -> Vec<PyObject> {
+    let mut result = Vec::with_capacity(rows.len());
+    let mut cache_guard = colname_cache.lock().unwrap();
+    
+    for row in rows {
+        let mut row_dict = PyDict::new(py);
+        for (i, col) in row.columns().iter().enumerate() {
+            let col_name = col.name();
+            let py_col_name = cache_guard.entry(col_name.to_string()).or_insert_with(|| PyString::new(py, col_name).into_py(py));
+            
+            let value = extract_mysql_value_py(py, row, i);
+            row_dict.set_item(py_col_name.as_ref(py), value).unwrap();
+        }
+        result.push(row_dict.into_py(py));
+    }
+    result
+}
+
+fn build_pyrows_from_sqlx_py_sqlite(py: Python, colname_cache: &Mutex<HashMap<String, Py<PyString>>>, rows: &[sqlx::sqlite::SqliteRow]) -> Vec<PyObject> {
+    let mut result = Vec::with_capacity(rows.len());
+    let mut cache_guard = colname_cache.lock().unwrap();
+    
+    for row in rows {
+        let mut row_dict = PyDict::new(py);
+        for (i, col) in row.columns().iter().enumerate() {
+            let col_name = col.name();
+            let py_col_name = cache_guard.entry(col_name.to_string()).or_insert_with(|| PyString::new(py, col_name).into_py(py));
+            
+            let value = extract_sqlite_value_py(py, row, i);
+            row_dict.set_item(py_col_name.as_ref(py), value).unwrap();
+        }
+        result.push(row_dict.into_py(py));
+    }
+    result
+}
+
+fn build_columns_py(py: Python, rows: &[sqlx::postgres::PgRow]) -> PyObject {
+    if rows.is_empty() {
+        return PyDict::new(py).into_py(py);
+    }
+    
+    let first = &rows[0];
+    let col_count = first.columns().len();
+    let mut columns: Vec<Vec<PyObject>> = vec![Vec::with_capacity(rows.len()); col_count];
+    
+    for row in rows {
+        for (i, _col) in first.columns().iter().enumerate() {
+            let value = extract_postgres_value_py(py, row, i);
+            columns[i].push(value);
+        }
+    }
+    
+    let result = PyDict::new(py);
+    for (i, col) in first.columns().iter().enumerate() {
+        let col_name = col.name();
+        let py_list = PyList::new(py, &columns[i]);
+        result.set_item(col_name, py_list).unwrap();
+    }
+    result.into_py(py)
+}
+
+fn build_columns_py_mysql(py: Python, rows: &[sqlx::mysql::MySqlRow]) -> PyObject {
+    if rows.is_empty() {
+        return PyDict::new(py).into_py(py);
+    }
+    
+    let first = &rows[0];
+    let col_count = first.columns().len();
+    let mut columns: Vec<Vec<PyObject>> = vec![Vec::with_capacity(rows.len()); col_count];
+    
+    for row in rows {
+        for (i, _col) in first.columns().iter().enumerate() {
+            let value = extract_mysql_value_py(py, row, i);
+            columns[i].push(value);
+        }
+    }
+    
+    let result = PyDict::new(py);
+    for (i, col) in first.columns().iter().enumerate() {
+        let col_name = col.name();
+        let py_list = PyList::new(py, &columns[i]);
+        result.set_item(col_name, py_list).unwrap();
+    }
+    result.into_py(py)
+}
+
+fn build_columns_py_sqlite(py: Python, rows: &[sqlx::sqlite::SqliteRow]) -> PyObject {
+    if rows.is_empty() {
+        return PyDict::new(py).into_py(py);
+    }
+    
+    let first = &rows[0];
+    let col_count = first.columns().len();
+    let mut columns: Vec<Vec<PyObject>> = vec![Vec::with_capacity(rows.len()); col_count];
+    
+    for row in rows {
+        for (i, _col) in first.columns().iter().enumerate() {
+            let value = extract_sqlite_value_py(py, row, i);
+            columns[i].push(value);
+        }
+    }
+    
+    let result = PyDict::new(py);
+    for (i, col) in first.columns().iter().enumerate() {
+        let col_name = col.name();
+        let py_list = PyList::new(py, &columns[i]);
+        result.set_item(col_name, py_list).unwrap();
+    }
+    result.into_py(py)
+}
+
+fn param_types_signature(params: &[ParamValue]) -> String {
+    let mut hasher = DefaultHasher::new();
+    for param in params {
+        ParamType::from_paramvalue(param).hash(&mut hasher);
+    }
+    format!("{:x}", hasher.finish())
+}
+
+fn extract_postgres_value_py(py: Python, row: &sqlx::postgres::PgRow, i: usize) -> PyObject {
+    match extract_postgres_value(row, i) {
+        Ok(value) => json_to_py_object(py, value).unwrap_or_else(|_| py.None().into_py(py)),
+        Err(_) => py.None().into_py(py),
+    }
+}
+
+fn extract_mysql_value_py(py: Python, row: &sqlx::mysql::MySqlRow, i: usize) -> PyObject {
+    match extract_mysql_value(row, i) {
+        Ok(value) => json_to_py_object(py, value).unwrap_or_else(|_| py.None().into_py(py)),
+        Err(_) => py.None().into_py(py),
+    }
+}
+
+fn extract_sqlite_value_py(py: Python, row: &sqlx::sqlite::SqliteRow, i: usize) -> PyObject {
+    match extract_sqlite_value(row, i) {
+        Ok(value) => json_to_py_object(py, value).unwrap_or_else(|_| py.None().into_py(py)),
+        Err(_) => py.None().into_py(py),
+    }
+}
 
 // ===== Query IR (serde) and SQL builder =====
 #[derive(Debug, Deserialize)]
@@ -67,6 +269,18 @@ struct QueryIR {
     with_sql: Option<String>, // optional CTE prefix without leading WITH
     #[serde(default)]
     returning: Option<Vec<String>>, // optional returning list (Postgres)
+    #[serde(default)]
+    row_factory: Option<String>, // hint for row factory (tuples, dicts, models, columns, arrow)
+}
+
+#[derive(Debug, Clone)]
+struct CompiledStatement {
+    sql: String,
+    param_order: Vec<String>,
+    cache_key: String,
+    result_shape: Vec<String>,
+    row_factory: RowFactory,
+    param_types: Vec<ParamType>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -613,6 +827,7 @@ async fn execute_insert_rows_chunked(pool: &DatabasePool, ir: &QueryIR, chunk_si
                     rows: Some(chunk.to_vec()),
                     with_sql: ir.with_sql.clone(),
                     returning: ir.returning.clone(),
+                    row_factory: None,
                 };
                 let (sql, params) = build_sql_from_ir(&chunk_ir);
                 let sql_to_run = if sql.contains('?') { normalize_placeholders_for_postgres(&sql, params.len()) } else { sql };
@@ -643,6 +858,7 @@ async fn execute_insert_rows_chunked(pool: &DatabasePool, ir: &QueryIR, chunk_si
                     rows: Some(chunk.to_vec()),
                     with_sql: ir.with_sql.clone(),
                     returning: ir.returning.clone(),
+                    row_factory: None,
                 };
                 let (sql, params) = build_sql_from_ir(&chunk_ir);
                 let mut query = sqlx::query(&sql);
@@ -671,6 +887,7 @@ async fn execute_insert_rows_chunked(pool: &DatabasePool, ir: &QueryIR, chunk_si
                     rows: Some(chunk.to_vec()),
                     with_sql: ir.with_sql.clone(),
                     returning: ir.returning.clone(),
+                    row_factory: None,
                 };
                 let (sql, params) = build_sql_from_ir(&chunk_ir);
                 let mut query = sqlx::query(&sql);
@@ -1363,6 +1580,8 @@ pub struct OxenEngine {
     min_connections: u32,
     runtime: Arc<Runtime>,
     is_connected: bool,
+    compiled_cache: Arc<Mutex<LruCache<String, CompiledStatement>>>,
+    colname_cache: Arc<Mutex<HashMap<String, Py<PyString>>>>,
 }
 
 #[pymethods]
@@ -1380,6 +1599,8 @@ impl OxenEngine {
             min_connections: 1,
             runtime,
             is_connected: false,
+            compiled_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1024).unwrap()))),
+            colname_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -1635,6 +1856,119 @@ impl OxenEngine {
             .map_err(|e| OxenError::SerializationError(e))?;
         
         json_to_py_object(py, result)
+    }
+
+    /// Compile IR and execute returning list[dict] (compiled path using sqlx row → dicts)
+    fn execute_ir_compiled_dicts(&self, py: Python, ir_json: String) -> PyResult<PyObject> {
+        if !self.is_connected { return Err(OxenError::NotConnected.into()); }
+        let pool = self.pool.as_ref().ok_or(OxenError::NotConnected)?;
+        let runtime = self.runtime.clone();
+        let (compiled, params_vec) = {
+            let ir: QueryIR = serde_json::from_str(&ir_json).map_err(|e| OxenError::SerializationError(e))?;
+            let (sql, params) = build_sql_from_ir(&ir);
+            let shape_key = {
+                let types_sig = param_types_signature(&params);
+                format!("{}|{}|dicts", sql, types_sig)
+            };
+            let cs = if let Some(cs) = self.compiled_cache.lock().unwrap().get(&shape_key) { 
+                cs.clone() 
+            } else {
+                let param_order = (0..params.len()).map(|i| format!("p{}", i+1)).collect::<Vec<_>>();
+                let result_shape = ir.select.clone();
+                let cs = CompiledStatement {
+                    sql: sql.clone(), param_order, cache_key: shape_key.clone(), result_shape,
+                    row_factory: RowFactory::Dicts,
+                    param_types: params.iter().map(|p| ParamType::from_paramvalue(p)).collect(),
+                };
+                self.compiled_cache.lock().unwrap().put(shape_key, cs.clone());
+                cs
+            };
+            (cs, params)
+        };
+        let rows_py_res: Result<Vec<PyObject>, OxenError> = py.allow_threads(|| {
+            runtime.block_on(async {
+                match pool {
+                    DatabasePool::Postgres(p) => {
+                        let sql_to_use = if compiled.sql.contains('?') { normalize_placeholders_for_postgres(&compiled.sql, params_vec.len()) } else { compiled.sql.clone() };
+                        let mut query = sqlx::query(&sql_to_use);
+                        for param in params_vec.iter() { query = bind_postgres_param(query, param); }
+                        let rows = query.fetch_all(p.as_ref()).await.map_err(OxenError::QueryError)?;
+                        Ok::<Vec<PyObject>, OxenError>(Python::with_gil(|py| build_pyrows_from_sqlx_py(py, &self.colname_cache, &rows)))
+                    }
+                    DatabasePool::MySQL(p) => {
+                        let mut query = sqlx::query(&compiled.sql);
+                        for param in params_vec.iter() { query = bind_mysql_param(query, param); }
+                        let rows = query.fetch_all(p.as_ref()).await.map_err(OxenError::QueryError)?;
+                        Ok::<Vec<PyObject>, OxenError>(Python::with_gil(|py| build_pyrows_from_sqlx_py_mysql(py, &self.colname_cache, &rows)))
+                    }
+                    DatabasePool::SQLite(p) => {
+                        let mut query = sqlx::query(&compiled.sql);
+                        for param in params_vec.iter() { query = bind_sqlite_param(query, param); }
+                        let rows = query.fetch_all(p.as_ref()).await.map_err(OxenError::QueryError)?;
+                        Ok::<Vec<PyObject>, OxenError>(Python::with_gil(|py| build_pyrows_from_sqlx_py_sqlite(py, &self.colname_cache, &rows)))
+                    }
+                }
+            })
+        });
+        let rows_py = rows_py_res.unwrap_or_default();
+        let py_list = PyList::empty(py);
+        for r in rows_py.into_iter() { py_list.append(r)?; }
+        Ok(py_list.into())
+    }
+
+    /// Compile IR and execute returning dict[column] -> list of values
+    fn execute_ir_compiled_columns(&self, py: Python, ir_json: String) -> PyResult<PyObject> {
+        if !self.is_connected { return Err(OxenError::NotConnected.into()); }
+        let pool = self.pool.as_ref().ok_or(OxenError::NotConnected)?;
+        let runtime = self.runtime.clone();
+        let (compiled, params_vec) = {
+            let ir: QueryIR = serde_json::from_str(&ir_json).map_err(|e| OxenError::SerializationError(e))?;
+            let (sql, params) = build_sql_from_ir(&ir);
+            let shape_key = {
+                let types_sig = param_types_signature(&params);
+                format!("{}|{}|columns", sql, types_sig)
+            };
+            let cs = if let Some(cs) = self.compiled_cache.lock().unwrap().get(&shape_key) { 
+                cs.clone() 
+            } else {
+                let param_order = (0..params.len()).map(|i| format!("p{}", i+1)).collect::<Vec<_>>();
+                let result_shape = ir.select.clone();
+                let cs = CompiledStatement {
+                    sql: sql.clone(), param_order, cache_key: shape_key.clone(), result_shape,
+                    row_factory: RowFactory::Columns,
+                    param_types: params.iter().map(|p| ParamType::from_paramvalue(p)).collect(),
+                };
+                self.compiled_cache.lock().unwrap().put(shape_key, cs.clone());
+                cs
+            };
+            (cs, params)
+        };
+        let columns_py_res: Result<PyObject, OxenError> = py.allow_threads(|| {
+            runtime.block_on(async {
+                match pool {
+                    DatabasePool::Postgres(p) => {
+                        let sql_to_use = if compiled.sql.contains('?') { normalize_placeholders_for_postgres(&compiled.sql, params_vec.len()) } else { compiled.sql.clone() };
+                        let mut query = sqlx::query(&sql_to_use);
+                        for param in params_vec.iter() { query = bind_postgres_param(query, param); }
+                        let rows = query.fetch_all(p.as_ref()).await.map_err(OxenError::QueryError)?;
+                        Ok::<PyObject, OxenError>(Python::with_gil(|py| build_columns_py(py, &rows)))
+                    }
+                    DatabasePool::MySQL(p) => {
+                        let mut query = sqlx::query(&compiled.sql);
+                        for param in params_vec.iter() { query = bind_mysql_param(query, param); }
+                        let rows = query.fetch_all(p.as_ref()).await.map_err(OxenError::QueryError)?;
+                        Ok::<PyObject, OxenError>(Python::with_gil(|py| build_columns_py_mysql(py, &rows)))
+                    }
+                    DatabasePool::SQLite(p) => {
+                        let mut query = sqlx::query(&compiled.sql);
+                        for param in params_vec.iter() { query = bind_sqlite_param(query, param); }
+                        let rows = query.fetch_all(p.as_ref()).await.map_err(OxenError::QueryError)?;
+                        Ok::<PyObject, OxenError>(Python::with_gil(|py| build_columns_py_sqlite(py, &rows)))
+                    }
+                }
+            })
+        });
+        Ok(columns_py_res.unwrap_or_else(|_| PyDict::new(py).into()))
     }
 }
 

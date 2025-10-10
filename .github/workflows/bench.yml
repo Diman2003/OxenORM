@@ -1,0 +1,141 @@
+name: CI Benchmarks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ develop ]
+  pull_request:
+    branches: [ develop ]
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: oxenorm
+          POSTGRES_PASSWORD: oxenorm
+          POSTGRES_DB: oxenorm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y libpq-dev python3-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build and develop oxen_engine
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          maturin develop --release
+
+      - name: Install Python deps
+        run: |
+          source venv/bin/activate
+          pip install -r requirements.txt
+          pip install matplotlib seaborn numpy
+
+      - name: Wait for Postgres
+        run: |
+          for i in {1..20}; do
+            pg_isready -h localhost -p 5432 -U oxenorm && break
+            sleep 2
+          done
+
+      - name: Run benchmarks (OxenORM only)
+        env:
+          OXEN_BENCH_DB: postgresql://oxenorm:oxenorm@localhost:5432/oxenorm
+          OXEN_BENCH_ONLY: oxenorm
+          OXEN_BENCH_ITER: 25
+          OXEN_ONLY_TUPLES: '1'
+          OXEN_PG_FETCH_SIZE: 10000
+          OXEN_BENCH_OUT: ci_bench_results_pg.json
+          OXEN_MIN_OVERHEAD: '1'
+          OXEN_PG_COPY: '1'
+        run: |
+          source venv/bin/activate
+          python benchmarks/perf_bench.py | tee benchmarks/ci_bench_results_pg.json
+
+      - name: Generate charts
+        env:
+          OXEN_BENCH_JSON: benchmarks/ci_bench_results_pg.json
+        run: |
+          source venv/bin/activate
+          python scripts/generate_performance_graph.py
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: oxen_bench_artifacts_pg
+          path: |
+            benchmarks/ci_bench_results_pg.json
+            docs/_static/performance_comparison.png
+            docs/_static/speedup_chart.png
+            docs/_static/performance_architecture.png
+            docs/_static/feature_comparison.png
+
+  bench-sqlite:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build and develop oxen_engine
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          maturin develop --release
+
+      - name: Install Python deps
+        run: |
+          source venv/bin/activate
+          pip install -r requirements.txt
+
+      - name: Run SQLite benchmarks (safe quick path)
+        env:
+          OXEN_BENCH_DB: sqlite:///smoke_test.db
+          OXEN_BENCH_ONLY: oxenorm
+          OXEN_BENCH_ITER: 50
+          OXEN_ONLY_TUPLES: '1'
+          OXEN_MIN_OVERHEAD: '1'
+          OXEN_BENCH_OUT: ci_bench_results_sqlite.json
+        run: |
+          source venv/bin/activate
+          python benchmarks/perf_bench.py | tee benchmarks/ci_bench_results_sqlite.json
+
+      - name: Upload SQLite artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: oxen_bench_artifacts_sqlite
+          path: |
+            benchmarks/ci_bench_results_sqlite.json

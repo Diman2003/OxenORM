@@ -1,0 +1,197 @@
+✅ Rust backend initialized for: postgresql://oxenorm:oxenorm@localhost:5432/oxenorm
+✅ Rust backend initialized for: postgresql://oxenorm:oxenorm@localhost:5432/oxenorm
+✅ Rust backend initialized for: postgresql://oxenorm:oxenorm@localhost:5432/oxenorm
+{
+  "oxen": [
+    {
+      "name": "oxen_read_one",
+      "iterations": 300,
+      "elapsed_s": 0.31398600000102306,
+      "qps": 955.4566127121035
+    },
+    {
+      "name": "oxen_read_many",
+      "iterations": 300,
+      "elapsed_s": 0.24727604200052156,
+      "qps": 1213.2190307355665
+    },
+    {
+      "name": "oxen_read_one_tuples",
+      "iterations": 300,
+      "elapsed_s": 0.22134583399929397,
+      "qps": 1355.3451383275499
+    },
+    {
+      "name": "oxen_read_many_tuples",
+      "iterations": 300,
+      "elapsed_s": 0.22098566699969524,
+      "qps": 1357.5541077983746
+    },
+    {
+      "name": "oxen_read_one_models",
+      "iterations": 300,
+      "elapsed_s": 0.23466170800020336,
+      "qps": 1278.4361051345454
+    },
+    {
+      "name": "oxen_read_many_models",
+      "iterations": 300,
+      "elapsed_s": 0.2260504169989872,
+      "qps": 1327.1375650740079
+    }
+  ],
+  "sqlalchemy": [
+    {
+      "name": "sqlalchemy_read_one",
+      "iterations": 300,
+      "elapsed_s": 0.12679762500010838,
+      "qps": 2365.974914748944
+    },
+    {
+      "name": "sqlalchemy_read_many",
+      "iterations": 300,
+      "elapsed_s": 0.10880620900024951,
+      "qps": 2757.1955934914713
+    }
+  ],
+  "tortoise": [
+    {
+      "name": "tortoise_read_one",
+      "iterations": 300,
+      "elapsed_s": 0.20001254199996765,
+      "qps": 1499.9059408986889
+    },
+    {
+      "name": "tortoise_read_many",
+      "iterations": 300,
+      "elapsed_s": 0.17496358400057943,
+      "qps": 1714.6425166908246
+    }
+  ],
+  "oxen_ext": [
+    {
+      "name": "oxen_bulk_insert_copy_200",
+      "iterations": 1,
+      "elapsed_s": 0.022792166000726866,
+      "qps": 43.87472432273918
+    },
+    {
+      "name": "oxen_bulk_update_all",
+      "iterations": 1,
+      "elapsed_s": 0.0008982079998531844,
+      "qps": 1113.3278707865593
+    },
+    {
+      "name": "oxen_join_select_related",
+      "iterations": 300,
+      "elapsed_s": 600.2153543339991,
+      "qps": 0.499820602445069
+    },
+    {
+      "name": "oxen_window_count",
+      "iterations": 300,
+      "elapsed_s": 0.21847212499960733,
+      "qps": 1373.1728933406914
+    }
+  ],
+  "oxen_columnar": [
+    {
+      "name": "oxen_scan_columns",
+      "iterations": 300,
+      "elapsed_s": 0.29534241699911945,
+      "qps": 1015.7701120218517
+    }
+  ],
+  "sqlalchemy_ext": [
+    {
+      "name": "sa_bulk_insert_200",
+      "iterations": 1,
+      "elapsed_s": 0.007114207999620703,
+      "qps": 140.5637844793567
+    },
+    {
+      "name": "sa_bulk_update_all",
+      "iterations": 1,
+      "elapsed_s": 0.002307541999471141,
+      "qps": 433.3615597155706
+    },
+    {
+      "name": "sa_join_eager",
+      "iterations": 300,
+      "elapsed_s": 0.1421922909994464,
+      "qps": 2109.819019662381
+    },
+    {
+      "name": "sa_window_count",
+      "iterations": 300,
+      "elapsed_s": 0.11767320800026937,
+      "qps": 2549.4333425439822
+    }
+  ],
+  "tortoise_ext": [
+    {
+      "name": "tortoise_bulk_insert_200",
+      "iterations": 1,
+      "elapsed_s": 0.006652124999163789,
+      "qps": 150.32790275674404
+    },
+    {
+      "name": "tortoise_bulk_update_all",
+      "iterations": 1,
+      "elapsed_s": 0.0012799159994756337,
+      "qps": 781.3012732161236
+    },
+    {
+      "name": "tortoise_read_many_again",
+      "iterations": 300,
+      "elapsed_s": 0.2173939589993097,
+      "qps": 1379.9831484781628
+    },
+    {
+      "name": "tortoise_aggregate_count",
+      "iterations": 300,
+      "elapsed_s": 0.2208399580013065,
+      "qps": 1358.4498145857515
+    }
+  ],
+  "django": [
+    {
+      "name": "django_read_one",
+      "iterations": 300,
+      "elapsed_s": 0.14668437500040454,
+      "qps": 2045.207609871008
+    },
+    {
+      "name": "django_read_many",
+      "iterations": 300,
+      "elapsed_s": 0.12551191700003983,
+      "qps": 2390.2112816897284
+    }
+  ],
+  "django_ext": [
+    {
+      "name": "django_bulk_insert_200",
+      "iterations": 1,
+      "elapsed_s": 0.012242124999829684,
+      "qps": 81.6851649541164
+    },
+    {
+      "name": "django_bulk_update_all",
+      "iterations": 1,
+      "elapsed_s": 0.007358959001066978,
+      "qps": 135.88878533703064
+    },
+    {
+      "name": "django_join_select_related",
+      "iterations": 300,
+      "elapsed_s": 0.13446304200078885,
+      "qps": 2231.096333505827
+    },
+    {
+      "name": "django_aggregate_count",
+      "iterations": 300,
+      "elapsed_s": 0.13513462499940943,
+      "qps": 2220.0083805413387
+    }
+  ]
+}

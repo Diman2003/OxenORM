@@ -10,6 +10,11 @@ repository = "https://github.com/oxen-orm/oxen-orm"
 name = "oxen_engine"
 crate-type = ["cdylib"]
 
+[features]
+default = []
+pg_copy = ["tokio-postgres", "futures"]
+pg_stream = ["tokio-postgres", "futures"]
+
 [dependencies]
 # PyO3 for Python bindings (update to fix local link/runtime issues)
 pyo3 = { version = "0.20", features = ["extension-module"] }
@@ -20,6 +25,9 @@ tokio = { version = "1.0", features = ["full"] }
 
 # Database drivers
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "mysql", "sqlite", "uuid", "chrono", "json", "rust_decimal"] }
+tokio-postgres = { version = "0.7", optional = true, features = ["with-chrono-0_4", "with-uuid-1"] }
+futures = { version = "0.3", optional = true }
+bytes = "1"
 
 # Connection pooling
 bb8 = "0.8"
@@ -40,6 +48,7 @@ tracing-subscriber = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
 rust_decimal = { version = "1.32", features = ["serde"] }
+rayon = "1.10"
 
 # URL parsing
 url = "2.0"
@@ -49,6 +58,9 @@ base64 = "0.21"
 
 # Image processing
 image = { version = "0.24", features = ["png", "jpeg", "gif", "bmp", "webp"] }
+
+# LRU cache
+lru = "0.12"
 
 [dev-dependencies]
 tokio-test = "0.4"

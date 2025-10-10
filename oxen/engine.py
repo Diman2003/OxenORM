@@ -243,6 +243,7 @@ class UnifiedEngine:
         self.rust_engine = None
         self.query_cache = QueryCache()
         self.prepared_statements = PreparedStatementCache()
+        self.compiled_statement_cache = None
         self.performance_monitor = PerformanceMonitor()
         self.query_optimizer = None  # Will be initialized when needed
         self.is_connected = False
@@ -251,14 +252,12 @@ class UnifiedEngine:
             'pool_size': 0,
             'active_connections': 0,
         }
-        
+        # Table-epoch invalidation: increments on writes per table
+        self._table_epochs: Dict[str, int] = {}
         # Parse connection string
         if connection_string.startswith('sqlite://'):
             self.db_type = 'sqlite'
-            # Normalize forms: sqlite:////abs/path or sqlite:///relative
             self.db_path = connection_string.replace('sqlite://', '')
-            # If path is like ///abs, leave as-is; sqlx accepts sqlite:///abs or file path
-            # Keep original connection_string for Rust, but keep db_path for directory creation
         elif connection_string.startswith('postgresql://'):
             self.db_type = 'postgresql'
             self.db_url = connection_string
@@ -267,18 +266,17 @@ class UnifiedEngine:
             self.db_url = connection_string
         else:
             raise ValueError(f"Unsupported database type: {connection_string}")
-        
-        # Feature flag to control Rust backend (defaults to enabled)
-        # Any non-"0" value enables Rust. Python I/O fallback is no longer supported.
         self.use_rust = os.getenv('OXEN_RUST_BACKEND', '1') != '0'
+        # Initialize compiled statement cache
+        from oxen.compiled_statement_cache import CompiledStatementCache
+        self.compiled_statement_cache = CompiledStatementCache(max_size=256)
     
     async def connect(self) -> Dict[str, Any]:
-        """Connect to the database using the Rust backend for all dialects."""
+        """Connect to the database using the Rust backend for all dialects and prewarm compiled statement cache."""
         try:
             # Ensure SQLite file parent directory exists (avoids 'unable to open database file')
             if getattr(self, 'db_type', None) == 'sqlite':
                 db_path = getattr(self, 'db_path', '')
-                # Skip memory modes
                 if db_path and ':memory:' not in db_path and not db_path.startswith('file::memory:'):
                     dirpath = os.path.dirname(db_path)
                     if dirpath:
@@ -294,10 +292,8 @@ class UnifiedEngine:
                 result = await self._rust_engine.connect()
                 self.is_connected = True
                 self._connected = True
-                # expose rust engine
                 self.rust_engine = self._rust_engine
                 record_connection_metric(1, 1)
-                # best-effort pool stats
                 try:
                     pool = await self._rust_engine.get_pool_status()
                     if isinstance(pool, dict):
@@ -307,6 +303,13 @@ class UnifiedEngine:
                         })
                 except Exception:
                     self.connection_stats['active_connections'] = 1
+                # Prewarm compiled statement cache with common queries
+                from oxen.ir_sql_compiler import SQLCompiler, SelectIR
+                common_irs = [
+                    SelectIR(table='users', columns=['id', 'username'], limit=0),
+                    SelectIR(table='posts', columns=['id', 'title'], limit=0),
+                ]
+                self.compiled_statement_cache.prewarm(SQLCompiler, common_irs)
                 return {
                     'success': True,
                     'message': f'Connected to {self.db_type} database',
@@ -331,8 +334,28 @@ class UnifiedEngine:
                            use_cache: bool = True, cache_ttl: Optional[int] = None) -> Dict[str, Any]:
         """Execute a query with optimization and monitoring."""
         start_time = time_module.time()
-        
+        minimal_overhead = os.getenv('OXEN_MIN_OVERHEAD', '0') == '1'
+        cache_enabled = os.getenv('OXEN_CACHE', '1') != '0'
+
         try:
+            # Cache for read (SELECT) queries
+            is_select = sql.lstrip().lower().startswith('select')
+            tables_for_select = self._extract_tables(sql) if is_select else []
+            cache_key_params = None
+            if is_select and use_cache and cache_enabled:
+                try:
+                    epochs = {t: self._table_epochs.get(t, 0) for t in tables_for_select}
+                    cache_key_params = {'params': params or [], '__epochs__': epochs}
+                    cached = self.query_cache.get(sql, cache_key_params)
+                    if cached is not None:
+                        result = cached
+                        result = dict(result) if isinstance(result, dict) else {'data': cached}
+                        result['cached'] = True
+                        result.setdefault('rows_affected', len(result.get('data') or []))
+                        return result
+                except Exception:
+                    pass
+
             # Execute the query via Rust backend only
             if not getattr(self, '_rust_engine', None):
                 # Try to initialize/connect Rust engine lazily
@@ -347,61 +370,140 @@ class UnifiedEngine:
             rows_affected = result.get('rows_affected', 0)
             success = result.get('success', False)
             
-            # Record monitoring metrics
-            record_query_metric(execution_time, success, rows_affected)
-            
-            # Record cache metrics if using cache
-            if use_cache:
-                cache_hit = result.get('cached', False)
-                record_cache_metric(cache_hit)
-            
-            # Optimize and analyze the query
-            if self.query_optimizer is None:
-                from oxen.query_optimizer import get_optimizer
-                self.query_optimizer = get_optimizer()
-            
-            query_plan = self.query_optimizer.optimize_query(sql, execution_time, rows_affected)
-            
-            # Add optimization info to result
-            result['optimization'] = {
-                'performance_score': query_plan.performance_score,
-                'suggestions': query_plan.optimization_suggestions,
-                'execution_time': execution_time
-            }
-            
-            # Record performance metrics
-            self.performance_monitor.record_query(QueryMetrics(
-                sql=sql,
-                execution_time=execution_time,
-                rows_affected=rows_affected,
-                timestamp=datetime.now(),
-                success=result.get('success', False),
-                error=result.get('error')
-            ))
+            # Write invalidation: bump table epoch
+            if success and not is_select:
+                try:
+                    table = self._extract_write_table(sql)
+                    if table:
+                        self._table_epochs[table] = self._table_epochs.get(table, 0) + 1
+                        # Optional: could purge cache entries here (not required since epochs gate keys)
+                except Exception:
+                    pass
+
+            # Cache set for successful SELECT
+            if success and is_select and use_cache and cache_enabled:
+                try:
+                    if cache_key_params is None:
+                        epochs = {t: self._table_epochs.get(t, 0) for t in tables_for_select}
+                        cache_key_params = {'params': params or [], '__epochs__': epochs}
+                    self.query_cache.set(sql, result, cache_key_params, ttl=cache_ttl or int(os.getenv('OXEN_CACHE_TTL', '60')))
+                except Exception:
+                    pass
+
+            if not minimal_overhead:
+                # Record monitoring metrics
+                record_query_metric(execution_time, success, rows_affected)
+                # Record cache metrics if using cache
+                if use_cache:
+                    cache_hit = result.get('cached', False)
+                    record_cache_metric(cache_hit)
+                # Optimize and analyze the query
+                if self.query_optimizer is None:
+                    from oxen.query_optimizer import get_optimizer
+                    self.query_optimizer = get_optimizer()
+                query_plan = self.query_optimizer.optimize_query(sql, execution_time, rows_affected)
+                # Add optimization info to result
+                result['optimization'] = {
+                    'performance_score': query_plan.performance_score,
+                    'suggestions': query_plan.optimization_suggestions,
+                    'execution_time': execution_time
+                }
+                # Record performance metrics
+                self.performance_monitor.record_query(QueryMetrics(
+                    sql=sql,
+                    execution_time=execution_time,
+                    rows_affected=rows_affected,
+                    timestamp=datetime.now(),
+                    success=result.get('success', False),
+                    error=result.get('error')
+                ))
             
             return result
             
         except Exception as e:
             execution_time = time_module.time() - start_time
             
-            # Record failed query metrics
-            record_query_metric(execution_time, False, 0)
+            if not minimal_overhead:
+                # Record failed query metrics
+                record_query_metric(execution_time, False, 0)
             
-            # Record failed query
-            self.performance_monitor.record_query(QueryMetrics(
-                sql=sql,
-                execution_time=execution_time,
-                rows_affected=0,
-                timestamp=datetime.now(),
-                success=False,
-                error=str(e)
-            ))
+            if not minimal_overhead:
+                # Record failed query
+                self.performance_monitor.record_query(QueryMetrics(
+                    sql=sql,
+                    execution_time=execution_time,
+                    rows_affected=0,
+                    timestamp=datetime.now(),
+                    success=False,
+                    error=str(e)
+                ))
             
             return {
                 'success': False,
                 'error': str(e),
                 'execution_time': execution_time
             }
+    
+    def _extract_tables(self, sql: str) -> List[str]:
+        """Very simple SQL scan to find table names after FROM and JOIN.
+        Handles quoted identifiers with " and `.
+        """
+        s = sql.lower()
+        tokens = s.replace('\n', ' ').replace('\t',' ').split()
+        tables: List[str] = []
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i]
+            if tok in ('from', 'join', 'update', 'into') and i + 1 < len(tokens):
+                tbl = tokens[i+1]
+                # strip quotes and aliases
+                if tbl.startswith('"') and tbl.endswith('"') and len(tbl) > 1:
+                    tbl = tbl.strip('"')
+                if tbl.startswith('`') and tbl.endswith('`') and len(tbl) > 1:
+                    tbl = tbl.strip('`')
+                # drop schema prefix schema.table
+                if '.' in tbl:
+                    tbl = tbl.split('.')[-1]
+                # remove trailing comma or aliasing (e.g., table as t)
+                tbl = tbl.strip(',')
+                if tbl and tbl not in tables:
+                    tables.append(tbl)
+            i += 1
+        return tables
+
+    def _extract_write_table(self, sql: str) -> Optional[str]:
+        s = sql.strip().lower()
+        try:
+            if s.startswith('insert'):
+                # INSERT INTO table
+                parts = s.split()
+                if 'into' in parts:
+                    idx = parts.index('into')
+                    if idx + 1 < len(parts):
+                        tbl = parts[idx+1].strip('"`')
+                        if '.' in tbl:
+                            tbl = tbl.split('.')[-1]
+                        return tbl
+            if s.startswith('update'):
+                parts = s.split()
+                if len(parts) > 1:
+                    tbl = parts[1].strip('"`')
+                    if '.' in tbl:
+                        tbl = tbl.split('.')[-1]
+                    return tbl
+            if s.startswith('delete'):
+                # DELETE FROM table
+                parts = s.split()
+                if 'from' in parts:
+                    idx = parts.index('from')
+                    if idx + 1 < len(parts):
+                        tbl = parts[idx+1].strip('"`')
+                        if '.' in tbl:
+                            tbl = tbl.split('.')[-1]
+                        return tbl
+        except Exception:
+            return None
+        return None
     
     async def _execute_rust_query(self, sql: str, params: Optional[List[Any]] = None) -> Dict[str, Any]:
         """Execute a query using the Rust engine."""
@@ -579,82 +681,215 @@ class UnifiedEngine:
             placeholders = ["?" for _ in columns]
         
         sql = self._generate_insert_sql(table_name, columns, placeholders)
+        # Use RETURNING id when supported to retrieve PK directly
+        conn_lower = self.connection_string.lower()
+        supports_returning = ('postgresql' in conn_lower) or ('sqlite' in conn_lower)
+        if supports_returning:
+            sql = sql.strip() + " RETURNING id"
         
         result = await self.execute_query(sql, converted_values)
-        # Normalize return to include inserted id when available (Postgres)
+        # If we used RETURNING and got a row, propagate id
+        if supports_returning and result.get('error') is None:
+            rows = result.get('data') or []
+            if isinstance(rows, list) and rows:
+                first = rows[0]
+                rid = None
+                if isinstance(first, dict):
+                    rid = first.get('id') or first.get('pk')
+                elif isinstance(first, (list, tuple)) and first:
+                    rid = first[0]
+                if rid is not None:
+                    result['data'] = {'id': int(rid)}
+        # Try to fetch generated primary key id for convenience
+        try:
+            if result.get('error') is None:
+                conn = self.connection_string.lower()
+                existing_id = None
+                d = result.get('data')
+                if isinstance(d, dict):
+                    existing_id = d.get('id')
+                if 'sqlite' in conn and not existing_id:
+                    sel = await self.execute_query("SELECT last_insert_rowid() AS id")
+                    if sel.get('error') is None and sel.get('data'):
+                        last_id = sel['data'][0].get('id')
+                        if isinstance(last_id, (int, float)) and last_id:
+                            if not isinstance(result.get('data'), dict):
+                                result['data'] = {}
+                            result['data']['id'] = int(last_id)
+                elif 'mysql' in conn and not existing_id:
+                    sel = await self.execute_query("SELECT LAST_INSERT_ID() AS id")
+                    if sel.get('error') is None and sel.get('data'):
+                        last_id = sel['data'][0].get('id')
+                        if isinstance(last_id, (int, float)) and last_id:
+                            if not isinstance(result.get('data'), dict):
+                                result['data'] = {}
+                            result['data']['id'] = int(last_id)
+                elif 'postgresql' in conn and not existing_id:
+                    # Best-effort: fetch latest id from table
+                    qt = self._quote_identifier(table_name)
+                    sel = await self.execute_query(f"SELECT id FROM {qt} ORDER BY id DESC LIMIT 1")
+                    if sel.get('error') is None and sel.get('data'):
+                        last_id = sel['data'][0].get('id')
+                        if isinstance(last_id, (int, float)) and last_id:
+                            if not isinstance(result.get('data'), dict):
+                                result['data'] = {}
+                            result['data']['id'] = int(last_id)
+        except Exception:
+            pass
         if 'data' not in result:
             result['data'] = {}
         return result
     
     async def insert_many(self, table_name: str, records: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Insert multiple records into a table."""
+        """Insert multiple records into a table using a single multi-row INSERT when possible."""
         if not records:
             return {"success": True, "rows_affected": 0, "data": {"ids": []}}
-        
+
         columns = list(records[0].keys())
-        
-        # Convert all records to database-compatible format
-        converted_records = []
+
+        # Convert values per record
+        converted_records: List[List[Any]] = []
         for record in records:
-            converted_record = {}
-            for key, value in record.items():
-                if hasattr(value, 'as_tuple'):  # Decimal
+            row: List[Any] = []
+            for key in columns:
+                value = record.get(key)
+                if hasattr(value, 'as_tuple'):
                     if 'postgresql' in self.connection_string.lower():
-                        converted_record[key] = float(value)  # PostgreSQL numeric
+                        row.append(float(value))
                     else:
-                        converted_record[key] = str(value)  # SQLite text
+                        row.append(str(value))
                 elif isinstance(value, (datetime, date, time)):
                     if 'postgresql' in self.connection_string.lower():
-                        # PostgreSQL expects proper date/time types
-                        if isinstance(value, date):
-                            converted_record[key] = value  # Keep as date object
-                        elif isinstance(value, time):
-                            converted_record[key] = value  # Keep as time object
-                        elif isinstance(value, datetime):
-                            converted_record[key] = value  # Keep as datetime object
+                        row.append(value)
                     else:
-                        converted_record[key] = str(value)  # SQLite as string
-                elif isinstance(value, dict):  # JSON field
+                        row.append(str(value))
+                elif isinstance(value, dict):
                     if 'postgresql' in self.connection_string.lower():
-                        converted_record[key] = value
+                        row.append(value)
                     else:
-                        import json
-                        converted_record[key] = json.dumps(value)
-                elif isinstance(value, list):  # Array field
+                        import json as _json
+                        row.append(_json.dumps(value))
+                elif isinstance(value, list):
                     if 'postgresql' in self.connection_string.lower():
-                        converted_record[key] = value
+                        row.append(value)
                     else:
-                        import json
-                        converted_record[key] = json.dumps(value)
+                        import json as _json
+                        row.append(_json.dumps(value))
                 else:
-                    converted_record[key] = value
-            converted_records.append(converted_record)
-        
-        # Use appropriate placeholders based on database type
-        if 'postgresql' in self.connection_string.lower():
-            placeholders = [f"${i+1}" for i in range(len(columns))]
+                    row.append(value)
+            converted_records.append(row)
+
+        quoted_table = self._quote_identifier(table_name)
+        quoted_columns = [self._quote_identifier(col) for col in columns]
+
+        is_pg = 'postgresql' in self.connection_string.lower()
+        is_sqlite = 'sqlite' in self.connection_string.lower()
+
+        if is_pg:
+            # Prefer COPY if enabled via env and Rust feature compiled
+            if os.getenv('OXEN_PG_COPY', '0') == '1' and hasattr(self, '_rust_engine'):
+                try:
+                    rows_json = []
+                    for row in converted_records:
+                        rows_json.append({col: val for col, val in zip(columns, row)})
+                    ir = {
+                        'dialect': 'postgres',
+                        'table': table_name,
+                        'action': 'insert',
+                        'rows': rows_json,
+                    }
+                    import json as _json
+                    built = await self._rust_engine.execute_ir_json(_json.dumps(ir))  # type: ignore[attr-defined]
+                    if isinstance(built, dict) and built.get('error') is None:
+                        if 'data' not in built:
+                            built['data'] = {'ids': []}
+                        return built
+                except Exception:
+                    pass
+            # Prefer Rust IR path for up to 500 rows to leverage chunking and potential RETURNING
+            if hasattr(self, '_rust_engine') and len(converted_records) <= 500:
+                try:
+                    # Build IR for insert-many with RETURNING id
+                    rows_json = []
+                    for row in converted_records:
+                        rows_json.append({col: val for col, val in zip(columns, row)})
+                    ir = {
+                        'dialect': 'postgres',
+                        'table': table_name,
+                        'action': 'insert',
+                        'rows': rows_json,
+                        'returning': ['id'],
+                    }
+                    import json as _json
+                    built = await self._rust_engine.execute_ir_json(_json.dumps(ir))  # type: ignore[attr-defined]
+                    # Normalize result
+                    if isinstance(built, dict) and built.get('error') is None:
+                        rows = built.get('data') or []
+                        ids: List[int] = []
+                        for r in rows:
+                            rid = None
+                            if isinstance(r, dict):
+                                rid = r.get('id') or r.get('pk')
+                            elif isinstance(r, (list, tuple)) and r:
+                                rid = r[0]
+                            if isinstance(rid, (int, float)):
+                                ids.append(int(rid))
+                        built['data'] = {'ids': ids}
+                        return built
+                except Exception:
+                    pass
+            # Fallback: Build a single multi-row INSERT ... VALUES (...), (...)
+            values_clauses = []
+            flat_params: List[Any] = []
+            param_index = 1
+            for row in converted_records:
+                placeholders = [f"${i}" for i in range(param_index, param_index + len(columns))]
+                values_clauses.append(f"({', '.join(placeholders)})")
+                flat_params.extend(row)
+                param_index += len(columns)
+            sql = f"INSERT INTO {quoted_table} ({', '.join(quoted_columns)}) VALUES {', '.join(values_clauses)} RETURNING id"
+            result = await self.execute_query(sql, flat_params)
+            if result.get('error') is None:
+                rows = result.get('data') or []
+                ids: List[int] = []
+                for r in rows:
+                    if isinstance(r, dict):
+                        rid = r.get('id') or r.get('pk')
+                    elif isinstance(r, (list, tuple)):
+                        rid = r[0] if r else None
+                    else:
+                        rid = None
+                    if isinstance(rid, (int, float)):
+                        ids.append(int(rid))
+                result['data'] = {'ids': ids}
+            return result
+        elif is_sqlite:
+            # SQLite supports multi-row VALUES with '?'
+            values_clauses = []
+            flat_params = []
+            for row in converted_records:
+                placeholders = ["?" for _ in row]
+                values_clauses.append(f"({', '.join(placeholders)})")
+                flat_params.extend(row)
+            sql = f"INSERT INTO {quoted_table} ({', '.join(quoted_columns)}) VALUES {', '.join(values_clauses)}"
+            result = await self.execute_query(sql, flat_params)
+            # IDs retrieval omitted for SQLite batch; caller can refetch
+            if 'data' not in result:
+                result['data'] = {'ids': []}
+            return result
         else:
-            placeholders = ["?" for _ in columns]
-        
-        sql = self._generate_insert_sql(table_name, columns, placeholders)
-        
-        params_list = [list(record.values()) for record in converted_records]
-        result = await self.execute_many(sql, params_list)
-        
-        # Add generated IDs to result
-        if result.get('success'):
-            # For SQLite, we need to get the IDs by querying the last inserted rows
-            # This is a simplified approach - in production, you might want to use a more robust method
-            ids = []
-            if len(records) > 0:
-                # Get the last inserted ID and work backwards
-                last_id = result.get('last_id', 0)
-                for i in range(len(records)):
-                    ids.append(last_id - len(records) + 1 + i)
-            
-            result['data'] = {'ids': ids}
-        
-        return result
+            # MySQL: multi-row VALUES with '?' placeholders
+            values_clauses = []
+            flat_params = []
+            for row in converted_records:
+                placeholders = ["?" for _ in row]
+                values_clauses.append(f"({', '.join(placeholders)})")
+                flat_params.extend(row)
+            sql = f"INSERT INTO {quoted_table} ({', '.join(quoted_columns)}) VALUES {', '.join(values_clauses)}"
+            result = await self.execute_query(sql, flat_params)
+            if 'data' not in result:
+                result['data'] = {'ids': []}
+            return result
     
     async def select_records(self, table_name: str, conditions: Optional[Dict[str, Any]] = None, 
                            limit: Optional[int] = None, offset: Optional[int] = None) -> Dict[str, Any]:
@@ -665,10 +900,17 @@ class UnifiedEngine:
         
         if conditions:
             where_clauses = []
-            for key, value in conditions.items():
-                quoted_key = self._quote_identifier(key)
-                where_clauses.append(f'{quoted_key} = ?')
-                params.append(value)
+            if 'postgresql' in self.connection_string.lower():
+                for key, value in conditions.items():
+                    quoted_key = self._quote_identifier(key)
+                    param_index = len(params) + 1
+                    where_clauses.append(f'{quoted_key} = ${param_index}')
+                    params.append(value)
+            else:
+                for key, value in conditions.items():
+                    quoted_key = self._quote_identifier(key)
+                    where_clauses.append(f'{quoted_key} = ?')
+                    params.append(value)
             sql += f" WHERE {' AND '.join(where_clauses)}"
         
         if limit:

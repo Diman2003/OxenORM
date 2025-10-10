@@ -48,15 +48,153 @@ class OxenEngine:
             result = await loop.run_in_executor(None, self._rust_engine.execute_query, query)
         return result
 
+    async def execute_query_pyrows(self, query: str, params: Optional[List[Any]] = None) -> List[Dict[str, Any]]:
+        """Execute a query and return a list of dict rows built directly in Rust (lower overhead)."""
+        loop = asyncio.get_event_loop()
+        if params:
+            rows = await loop.run_in_executor(None, self._rust_engine.execute_query_pyrows, query, params)
+        else:
+            rows = await loop.run_in_executor(None, self._rust_engine.execute_query_pyrows, query)
+        return rows
+
     async def execute_ir(self, ir: Dict[str, Any]) -> Dict[str, Any]:
         """Build SQL from IR using Rust and execute via the engine."""
         if not RUST_AVAILABLE:
             raise ImportError("Rust backend not available. Please build with: cargo build")
         import json as _json
         loop = asyncio.get_event_loop()
-        # Call directly into Rust execute_ir_json to enable chunked insert-many and dialect execution
+        # Single FFI call; Rust releases GIL internally for I/O
         result = await loop.run_in_executor(None, self._rust_engine.execute_ir_json, _json.dumps(ir))
         return result
+
+    def execute_ir_json(self, ir_json: str) -> Dict[str, Any]:
+        """Synchronous passthrough for execute_ir_json on the Rust engine.
+
+        Intended to be called via run_in_executor from async contexts (e.g., benches using COPY).
+        """
+        if not RUST_AVAILABLE:
+            raise ImportError("Rust backend not available. Please build with: cargo build")
+        return self._rust_engine.execute_ir_json(ir_json)
+
+    async def start_stream(self, sql: str, fetch_size: int = 1000) -> Dict[str, Any]:
+        """Start a Postgres streaming cursor (requires pg_stream feature)."""
+        if not RUST_AVAILABLE:
+            raise ImportError("Rust backend not available. Build the Rust extension.")
+        loop = asyncio.get_event_loop()
+        try:
+            return await loop.run_in_executor(None, self._rust_engine.start_streaming_cursor, sql, fetch_size)  # type: ignore[attr-defined]
+        except AttributeError:
+            raise OperationalError("Streaming cursors not available. Rebuild with pg_stream feature.")
+
+    async def fetch_stream(self, cursor_id: str) -> Dict[str, Any]:
+        """Fetch next batch from a streaming cursor."""
+        if not RUST_AVAILABLE:
+            raise ImportError("Rust backend not available. Build the Rust extension.")
+        loop = asyncio.get_event_loop()
+        try:
+            return await loop.run_in_executor(None, self._rust_engine.fetch_streaming_cursor, cursor_id)  # type: ignore[attr-defined]
+        except AttributeError:
+            raise OperationalError("Streaming cursors not available. Rebuild with pg_stream feature.")
+
+    async def close_stream(self, cursor_id: str) -> Dict[str, Any]:
+        """Close a streaming cursor."""
+        if not RUST_AVAILABLE:
+            raise ImportError("Rust backend not available. Build the Rust extension.")
+        loop = asyncio.get_event_loop()
+        try:
+            return await loop.run_in_executor(None, self._rust_engine.close_streaming_cursor, cursor_id)  # type: ignore[attr-defined]
+        except AttributeError:
+            raise OperationalError("Streaming cursors not available. Rebuild with pg_stream feature.")
+
+    async def execute_ir_tuples(self, ir: Dict[str, Any]) -> list:
+        """Execute IR and return list[tuple] in one hop (fastest Python materialization)."""
+        if not RUST_AVAILABLE:
+            raise ImportError("Rust backend not available. Please build with: cargo build")
+        # Single-hop compiled tuple path
+        import json as _json
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._rust_engine.execute_compiled_ir_tuples, _json.dumps(ir))  # type: ignore[attr-defined]
+
+    async def execute_ir_dicts(self, ir: Dict[str, Any]) -> list[dict[str, Any]]:
+        """Execute IR and return list[dict] via compiled dict row factory."""
+        if not RUST_AVAILABLE:
+            raise ImportError("Rust backend not available. Please build with: cargo build")
+        import json as _json
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._rust_engine.execute_ir_compiled_dicts, _json.dumps(ir))  # type: ignore[attr-defined]
+
+    async def execute_ir_compiled_columns(self, ir: Dict[str, Any]) -> Dict[str, list[Any]]:
+        """Execute IR and return dict[column] -> list via compiled columns factory."""
+        if not RUST_AVAILABLE:
+            raise ImportError("Rust backend not available. Please build with: cargo build")
+        import json as _json
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._rust_engine.execute_ir_compiled_columns, _json.dumps(ir))  # type: ignore[attr-defined]
+
+    async def execute_ir_columns(self, ir: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute IR and return columnar dict[str, list] in one hop."""
+        if not RUST_AVAILABLE:
+            raise ImportError("Rust backend not available. Please build with: cargo build")
+        try:
+            from oxen_engine import build_sql_json
+            import json as _json
+            built = build_sql_json(_json.dumps(ir))
+            sql = built.get('sql')
+            params = built.get('params')
+        except Exception:
+            # Best-effort naive fallback
+            sql = f"SELECT * FROM {ir.get('table')}"
+            params = []
+        loop = asyncio.get_event_loop()
+        # Single hop to Rust column materializer
+        if params:
+            data = await loop.run_in_executor(None, self._rust_engine.execute_query_columns, sql, params)
+        else:
+            data = await loop.run_in_executor(None, self._rust_engine.execute_query_columns, sql, None)
+        return data if isinstance(data, dict) else {}
+
+    async def execute_ir_models(self, ir: Dict[str, Any], model_cls: Any, db_obj: Any, indices: list[int], names: list[str]) -> list:
+        """Execute IR and hydrate Python model instances in Rust.
+
+        Parameters
+        - ir: QuerySpec IR dict
+        - model_cls: Python model class (has _init_from_db)
+        - db_obj: DB/engine to assign to instance._meta.db
+        - indices: column indexes to map to attrs
+        - names: attribute names aligned with indices
+        """
+        if not RUST_AVAILABLE:
+            raise ImportError("Rust backend not available. Please build with: cargo build")
+        import json as _json
+        loop = asyncio.get_event_loop()
+        ir_json = _json.dumps(ir)
+        return await loop.run_in_executor(
+            None,
+            self._rust_engine.execute_ir_models,  # type: ignore[attr-defined]
+            ir_json,
+            model_cls,
+            db_obj,
+            indices,
+            names,
+        )
+
+    async def execute_ir_arrow(self, ir: Dict[str, Any]) -> Any:
+        """Execute IR and return a pyarrow.Table.
+
+        This leverages the fast Rust column materializer and constructs the table in Python.
+        Requires `pyarrow` and env OXEN_ARROW=1.
+        """
+        import os as _os
+        if _os.getenv('OXEN_ARROW', '0') != '1':
+            raise OperationalError("Arrow output disabled. Set OXEN_ARROW=1 to enable.")
+        try:
+            import importlib
+            pa = importlib.import_module('pyarrow')
+        except Exception:
+            raise OperationalError("pyarrow is not installed. Install with: pip install pyarrow")
+        # TODO: When Rust-native Arrow C Data is ready, swap to a native call.
+        cols = await self.execute_ir_columns(ir)
+        return pa.table(cols)
     
     async def execute_many(self, query: str, params_list: List[List[Any]]) -> Dict[str, Any]:
         """Execute a query with multiple parameter sets"""
@@ -77,7 +215,8 @@ class OxenEngine:
         
         # Get the last inserted ID based on database type
         if result.get('error') is None:
-            if 'sqlite' in self._connection_string.lower():
+            conn = self._connection_string.lower()
+            if 'sqlite' in conn:
                 # SQLite uses last_insert_rowid()
                 last_id_result = await self.execute_query("SELECT last_insert_rowid() as id")
                 if last_id_result.get('error') is None and last_id_result.get('data'):
@@ -95,7 +234,7 @@ class OxenEngine:
                                 alt_id = select_result['data'][0].get('id')
                                 if alt_id and alt_id != False and alt_id != 0:
                                     result['data'] = {'id': alt_id}
-            elif 'mysql' in self._connection_string.lower():
+            elif 'mysql' in conn:
                 # MySQL uses LAST_INSERT_ID()
                 last_id_result = await self.execute_query("SELECT LAST_INSERT_ID() as id")
                 if last_id_result.get('error') is None and last_id_result.get('data'):
@@ -117,6 +256,17 @@ class OxenEngine:
                                     result['data'] = {'id': alt_id}
                 else:
                     print(f"DEBUG: MySQL LAST_INSERT_ID failed: {last_id_result}")
+            elif 'postgres' in conn:
+                # Postgres: fallback by unique username if available
+                if 'username' in data:
+                    select_result = await self.execute_query(
+                        f"SELECT id FROM \"{table_name}\" WHERE \"username\" = ? ORDER BY id DESC LIMIT 1",
+                        [data['username']]
+                    )
+                    if select_result.get('error') is None and select_result.get('data'):
+                        alt_id = select_result['data'][0].get('id')
+                        if alt_id and alt_id != False and alt_id != 0:
+                            result['data'] = {'id': alt_id}
         
         return result
     

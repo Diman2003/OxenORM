@@ -1,0 +1,208 @@
+2025-10-03T07:14:02.095037Z  INFO sqlx::postgres::notice: relation "blog_users" already exists, skipping
+2025-10-03T07:14:02.140888Z  INFO sqlx::postgres::notice: relation "blog_posts" already exists, skipping
+2025-10-03T07:14:02.144132Z  INFO sqlx::postgres::notice: relation "blog_posts" already exists, skipping
+2025-10-03T07:14:02.145112Z  INFO sqlx::postgres::notice: relation "blog_users" already exists, skipping
+2025-10-03T07:14:04.583576Z  INFO sqlx::postgres::notice: relation "blog_users" already exists, skipping
+2025-10-03T07:14:04.584447Z  INFO sqlx::postgres::notice: relation "blog_users" already exists, skipping
+2025-10-03T07:14:04.594749Z  INFO sqlx::postgres::notice: relation "blog_posts" already exists, skipping
+2025-10-03T07:14:04.597140Z  INFO sqlx::postgres::notice: relation "blog_posts" already exists, skipping
+2025-10-03T07:14:04.673293Z  WARN sqlx::postgres::notice: there is no transaction in progress
+2025-10-03T07:14:05.334029Z  INFO sqlx::postgres::notice: relation "blog_posts" already exists, skipping
+2025-10-03T07:14:05.334022Z  INFO sqlx::postgres::notice: relation "blog_posts" already exists, skipping
+✅ Rust backend initialized for: postgresql://oxenorm:oxenorm@localhost:5432/oxenorm
+✅ Rust backend initialized for: postgresql://oxenorm:oxenorm@localhost:5432/oxenorm
+✅ Rust backend initialized for: postgresql://oxenorm:oxenorm@localhost:5432/oxenorm
+{
+  "oxen": [
+    {
+      "name": "oxen_read_one",
+      "iterations": 300,
+      "elapsed_s": 0.3568043330014916,
+      "qps": 840.7969641970291
+    },
+    {
+      "name": "oxen_read_many",
+      "iterations": 300,
+      "elapsed_s": 0.23798233299748972,
+      "qps": 1260.5977772440967
+    },
+    {
+      "name": "oxen_read_one_tuples",
+      "iterations": 300,
+      "elapsed_s": 0.23599416599608958,
+      "qps": 1271.2178656355895
+    },
+    {
+      "name": "oxen_read_many_tuples",
+      "iterations": 300,
+      "elapsed_s": 0.23088254100002814,
+      "qps": 1299.3619989653675
+    },
+    {
+      "name": "oxen_read_one_models",
+      "iterations": 300,
+      "elapsed_s": 0.24931095801002812,
+      "qps": 1203.3165425000414
+    },
+    {
+      "name": "oxen_read_many_models",
+      "iterations": 300,
+      "elapsed_s": 0.24458429199876264,
+      "qps": 1226.5710015486918
+    }
+  ],
+  "sqlalchemy": [
+    {
+      "name": "sqlalchemy_read_one",
+      "iterations": 300,
+      "elapsed_s": 0.1257135829946492,
+      "qps": 2386.376975770145
+    },
+    {
+      "name": "sqlalchemy_read_many",
+      "iterations": 300,
+      "elapsed_s": 0.11210645800747443,
+      "qps": 2676.027816167363
+    }
+  ],
+  "tortoise": [
+    {
+      "name": "tortoise_read_one",
+      "iterations": 300,
+      "elapsed_s": 0.19606795799336396,
+      "qps": 1530.081728143227
+    },
+    {
+      "name": "tortoise_read_many",
+      "iterations": 300,
+      "elapsed_s": 0.18852058300399221,
+      "qps": 1591.3381723079385
+    }
+  ],
+  "oxen_ext": [
+    {
+      "name": "oxen_bulk_insert_copy_200",
+      "iterations": 1,
+      "elapsed_s": 0.09003474999917671,
+      "qps": 11.106822643580886
+    },
+    {
+      "name": "oxen_bulk_update_all",
+      "iterations": 1,
+      "elapsed_s": 0.001397915999405086,
+      "qps": 715.350565002169
+    },
+    {
+      "name": "oxen_join_select_related",
+      "iterations": 300,
+      "elapsed_s": 0.23752462500124238,
+      "qps": 1263.0269387792143
+    },
+    {
+      "name": "oxen_window_count",
+      "iterations": 300,
+      "elapsed_s": 0.22467520799546037,
+      "qps": 1335.260809043344
+    }
+  ],
+  "oxen_columnar": [
+    {
+      "name": "oxen_scan_columns",
+      "iterations": 300,
+      "elapsed_s": 0.3718152500077849,
+      "qps": 806.8523278529289
+    }
+  ],
+  "sqlalchemy_ext": [
+    {
+      "name": "sa_bulk_insert_200",
+      "iterations": 1,
+      "elapsed_s": 0.00842466700123623,
+      "qps": 118.69905360689754
+    },
+    {
+      "name": "sa_bulk_update_all",
+      "iterations": 1,
+      "elapsed_s": 0.0019161250093020499,
+      "qps": 521.8866175982175
+    },
+    {
+      "name": "sa_join_eager",
+      "iterations": 300,
+      "elapsed_s": 0.13008120900485665,
+      "qps": 2306.251627695122
+    },
+    {
+      "name": "sa_window_count",
+      "iterations": 300,
+      "elapsed_s": 0.11271204199874774,
+      "qps": 2661.649941568205
+    }
+  ],
+  "tortoise_ext": [
+    {
+      "name": "tortoise_bulk_insert_200",
+      "iterations": 1,
+      "elapsed_s": 0.0063487500010523945,
+      "qps": 157.51132110009624
+    },
+    {
+      "name": "tortoise_bulk_update_all",
+      "iterations": 1,
+      "elapsed_s": 0.0013366670027608052,
+      "qps": 748.1294876993
+    },
+    {
+      "name": "tortoise_read_many_again",
+      "iterations": 300,
+      "elapsed_s": 0.19129241700284183,
+      "qps": 1568.2796249866153
+    },
+    {
+      "name": "tortoise_aggregate_count",
+      "iterations": 300,
+      "elapsed_s": 0.22506241701194085,
+      "qps": 1332.963557323226
+    }
+  ],
+  "django": [
+    {
+      "name": "django_read_one",
+      "iterations": 300,
+      "elapsed_s": 0.1393475840013707,
+      "qps": 2152.8898556077515
+    },
+    {
+      "name": "django_read_many",
+      "iterations": 300,
+      "elapsed_s": 0.11218562499561813,
+      "qps": 2674.1394007629565
+    }
+  ],
+  "django_ext": [
+    {
+      "name": "django_bulk_insert_200",
+      "iterations": 1,
+      "elapsed_s": 0.012607042008312419,
+      "qps": 79.32074782813072
+    },
+    {
+      "name": "django_bulk_update_all",
+      "iterations": 1,
+      "elapsed_s": 0.006901542001287453,
+      "qps": 144.89515528753637
+    },
+    {
+      "name": "django_join_select_related",
+      "iterations": 300,
+      "elapsed_s": 0.12751595799636561,
+      "qps": 2352.646717429284
+    },
+    {
+      "name": "django_aggregate_count",
+      "iterations": 300,
+      "elapsed_s": 0.1258021249959711,
+      "qps": 2384.6973968810757
+    }
+  ]
+}

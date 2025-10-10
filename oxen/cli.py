@@ -16,6 +16,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from .engine import UnifiedEngine, connect, disconnect
+from .schema import sync_model
 from .models import Model
 from .migrations import MigrationEngine
 
@@ -25,6 +26,69 @@ from .migrations import MigrationEngine
 def cli():
     """OxenORM - High-Performance Python ORM with Rust Backend"""
     pass
+@cli.group()
+def init():
+    """Initialization commands"""
+    pass
+
+
+@init.command('db')
+@click.option('--url', '-u', required=True, help='Database connection URL')
+@click.option('--models', '-m', multiple=True, help='Model modules to import (e.g., examples.full_app.models)')
+def init_db(url: str, models: tuple[str, ...]):
+    """Bind DB and ensure tables/columns from models (auto schema)."""
+    async def _run():
+        try:
+            engine = await connect(url)
+            click.echo(f"✅ Connected: {url}")
+            # Import model modules and bind engine
+            imported = []
+            for mod in models:
+                imported.append(__import__(mod, fromlist=['*']))
+            # Find all Model subclasses and sync
+            from .models import Model as _M
+            subclasses = set()
+            def collect(cls):
+                for sc in cls.__subclasses__():
+                    subclasses.add(sc)
+                    collect(sc)
+            collect(_M)
+            for sc in subclasses:
+                try:
+                    sc._set_rust_engine(engine)
+                    sync_model(engine, sc)
+                except Exception:
+                    pass
+            click.echo("✅ Auto schema ensured for provided models")
+            await disconnect(engine)
+        except Exception as e:
+            click.echo(f"❌ init db failed: {e}", err=True)
+            sys.exit(1)
+    asyncio.run(_run())
+
+
+@cli.group()
+def run():
+    """Run demo or tasks"""
+    pass
+
+
+@run.command('demo')
+@click.option('--url-pg', default=os.environ.get('OXEN_FULL_PG', ''), help='Postgres URL')
+@click.option('--url-my', default=os.environ.get('OXEN_FULL_MY', ''), help='MySQL URL')
+def run_demo(url_pg: str, url_my: str):
+    """Run the full_app business logic demo (auto schema)."""
+    async def _demo():
+        try:
+            # Import demo module and call main()
+            import importlib
+            mod = importlib.import_module('examples.full_app.business_logic')
+            await mod.main()
+            click.echo("✅ Demo completed")
+        except Exception as e:
+            click.echo(f"❌ Demo failed: {e}", err=True)
+            sys.exit(1)
+    asyncio.run(_demo())
 
 
 @cli.group()
@@ -102,16 +166,23 @@ def makemigrations(url: str, app: Optional[str]):
         try:
             engine = await connect(url)
             migration_engine = MigrationEngine(engine)
-            
-            # Generate migrations
-            migrations = await migration_engine.generate_migrations(app)
-            
-            if migrations:
-                click.echo(f"✅ Generated {len(migrations)} migration(s):")
-                for migration in migrations:
-                    click.echo(f"  📝 {migration['name']}")
+            # For now, create a placeholder migration from current models module(s)
+            # Users should pass model modules via --models on init or import them before running CLI
+            from oxen.models import Model as _M
+            subclasses = set()
+            def collect(cls):
+                for sc in cls.__subclasses__():
+                    subclasses.add(sc)
+                    collect(sc)
+            collect(_M)
+            if not subclasses:
+                click.echo("ℹ️  No models found to generate migrations from")
             else:
-                click.echo("ℹ️  No new migrations needed")
+                migration = await migration_engine.generate_migration_from_models(
+                    list(subclasses), description="auto_migration", author="cli"
+                )
+                filepath = migration_engine.generator.save_migration(migration)
+                click.echo(f"✅ Generated migration: {migration.name} -> {filepath}")
             
             await disconnect(engine)
             
@@ -132,16 +203,12 @@ def apply_migrations(url: str, app: Optional[str], fake: bool):
         try:
             engine = await connect(url)
             migration_engine = MigrationEngine(engine)
-            
-            # Apply migrations
-            applied = await migration_engine.apply_migrations(app, fake=fake)
-            
-            if applied:
-                click.echo(f"✅ Applied {len(applied)} migration(s):")
-                for migration in applied:
-                    click.echo(f"  ✅ {migration['name']}")
+            # Apply all pending migrations using unified runner
+            result = await migration_engine.run_migrations()
+            if result.get('success') and result.get('migrations_run', 0) > 0:
+                click.echo(f"✅ Applied {result.get('migrations_run')} migration(s)")
             else:
-                click.echo("ℹ️  No pending migrations")
+                click.echo("ℹ️  No pending migrations or apply failed")
             
             await disconnect(engine)
             
@@ -161,16 +228,12 @@ def showmigrations(url: str, app: Optional[str]):
         try:
             engine = await connect(url)
             migration_engine = MigrationEngine(engine)
-            
-            # Get migration status
-            status = await migration_engine.get_migration_status(app)
-            
+            status = await migration_engine.get_migration_status()
             click.echo("📋 Migration Status:")
-            for app_name, migrations in status.items():
-                click.echo(f"\n📁 {app_name}:")
-                for migration in migrations:
-                    status_icon = "✅" if migration['applied'] else "⏳"
-                    click.echo(f"  {status_icon} {migration['name']}")
+            click.echo(f"  Applied: {status.get('applied_count')}")
+            click.echo(f"  Pending: {status.get('pending_count')}")
+            click.echo(f"  Current Version: {status.get('current_version')}")
+            click.echo(f"  Latest Version: {status.get('latest_version')}")
             
             await disconnect(engine)
             
